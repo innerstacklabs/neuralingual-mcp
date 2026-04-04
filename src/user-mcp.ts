@@ -14,6 +14,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { z } from 'zod';
 import { UserApiClient } from './user-client.js';
+import { loadAuth } from './auth-store.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
 import { API_BASE_URLS } from './types.js';
 import type {
@@ -344,8 +345,9 @@ function buildServer() {
     },
     async ({ gender, accent, tier }) => {
       try {
-        // Voices endpoint is public — no auth needed
-        const baseUrl = API_BASE_URLS['production'];
+        // Voices endpoint is public — no auth needed, but use the correct env
+        const auth = loadAuth();
+        const baseUrl = API_BASE_URLS[auth?.env ?? 'production'];
         const res = await fetch(`${baseUrl}/voices`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as { voices: Array<Record<string, unknown>> };
@@ -567,11 +569,19 @@ function buildServer() {
     },
     async ({ id }) =>
       withClient(async (client) => {
-        // Find the render job ID from the library
+        // Find the library item, resolving short IDs with ambiguity check
         const { items } = await client.getLibrary();
-        const item =
-          items.find((i) => i.intent.id === id) ??
-          items.find((i) => i.intent.id.startsWith(id));
+        let item = items.find((i) => i.intent.id === id);
+        if (!item) {
+          const prefixMatches = items.filter((i) => i.intent.id.startsWith(id));
+          if (prefixMatches.length === 1) {
+            item = prefixMatches[0];
+          } else if (prefixMatches.length > 1) {
+            throw new Error(
+              `Ambiguous ID "${id}" matches ${prefixMatches.length} sets. Use a longer prefix or the full ID.`,
+            );
+          }
+        }
         if (!item) {
           return errorResult('Practice set not found. Use nl_library to see available sets.');
         }
