@@ -70,6 +70,8 @@ neuralingual play <id> --open
 | `set create` | Create set from YAML |
 | `settings` | View/update preferences |
 
+See the [User Guide](docs/USER_GUIDE.md) for detailed usage and examples.
+
 ## License
 
 MIT

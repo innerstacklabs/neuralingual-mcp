@@ -23,7 +23,7 @@ const program = new Command();
 program
   .name('neuralingual')
   .description('Neuralingual — AI-powered affirmation practice sets')
-  .version('0.1.0')
+  .version('0.2.0')
   .option('--env <env>', 'API environment: dev or production (default: production)', 'production');
 
 function printResult(data: unknown, isError = false): void {
@@ -49,77 +49,6 @@ function printTable(rows: string[][], headers: string[]): void {
   }
 }
 
-/** Read all of stdin and return as a string. */
-function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    process.stdin.on('error', reject);
-  });
-}
-
-/** Get a user client from stored auth. Exits with helpful message if not logged in. */
-function getUserClient(): UserApiClient {
-  try {
-    return UserApiClient.fromAuth();
-  } catch {
-    console.error('Not logged in. Run `neuralingual login` first.');
-    process.exit(1);
-  }
-}
-
-/** Resolve API env: explicit --env flag wins, then stored auth, then default 'production'. */
-function resolveApiEnv(): ApiEnv {
-  const opts = program.opts();
-  const explicitEnv = process.argv.some((a) => a === '--env' || a.startsWith('--env='));
-  const env = (explicitEnv ? opts['env'] : loadAuth()?.env ?? opts['env'] ?? 'production') as string;
-  if (env !== 'dev' && env !== 'production') {
-    console.error(`Error: --env must be "dev" or "production", got "${env}"`);
-    process.exit(1);
-  }
-  return env;
-}
-
-/** Resolve the API base URL using resolveApiEnv(). */
-function getApiBaseUrl(): string {
-  return API_BASE_URLS[resolveApiEnv()];
-}
-
-/**
- * Resolve a short/truncated intent ID to the full ID by fetching the user's library.
- * Handles exact match, prefix match, and ambiguous matches (multiple prefix hits).
- */
-async function resolveIntentId(client: UserApiClient, shortId: string): Promise<string> {
-  const { items } = await client.getLibrary();
-  const exact = items.find((i) => i.intent.id === shortId);
-  if (exact) return exact.intent.id;
-
-  const prefixMatches = items.filter((i) => i.intent.id.startsWith(shortId));
-  if (prefixMatches.length === 1) return prefixMatches[0]!.intent.id;
-  if (prefixMatches.length > 1) {
-    console.error(`Error: ambiguous ID "${shortId}" matches ${prefixMatches.length} intents:`);
-    for (const m of prefixMatches) {
-      console.error(`  ${m.intent.id.slice(0, 12)}  ${m.intent.title ?? '(untitled)'}`);
-    }
-    process.exit(1);
-  }
-
-  console.error(`Error: no practice set found matching "${shortId}"`);
-  process.exit(1);
-}
-
-/** Prompt the user for input on stdin. */
-function prompt(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
-
 // ─── render ──────────────────────────────────────────────────────────────────
 
 const renderCmd = program.command('render').description('Render audio for an intent');
@@ -131,7 +60,7 @@ renderCmd
   .requiredOption('--context <context>', `Session context: ${VALID_CONTEXTS.join(', ')}`)
   .requiredOption('--duration <minutes>', 'Duration in minutes', parseInt)
   .option('--pace <wpm>', 'Pace in words per minute (uses context default if omitted)', parseInt)
-  .option('--background <key>', 'Background sound storageKey (use neuralingual voices; omit to disable)')
+  .option('--background <key>', 'Background sound storageKey (use neuralingual voices list; omit to disable)')
   .option('--background-volume <level>', 'Background volume 0–1 (uses context default if omitted)', parseFloat)
   .option('--repeats <n>', 'Number of times each affirmation repeats (uses context default if omitted)', parseInt)
   .option('--preamble <on|off>', 'Include intro/outro preamble: on or off (preserves existing setting if omitted)')
@@ -185,7 +114,7 @@ renderCmd
     try {
       const client = getUserClient();
       const resolvedId = await resolveIntentId(client, intentId);
-      const input: RenderConfigInput = {
+      const input: Parameters<typeof client.configureRender>[1] = {
         voiceId: opts.voice,
         sessionContext: opts.context as SessionContext,
         durationMinutes: opts.duration,
@@ -240,12 +169,15 @@ renderCmd
           continue;
         }
 
+        // Guard: if status has no jobId at all, the render config was likely reconfigured
+        // and the job we started is no longer the current one — exit to avoid infinite loop
         if (status.jobId === undefined) {
           console.error(`Warning: render status has no active job (config may have been reconfigured). Exiting --wait.`);
           printResult(status);
           return;
         }
 
+        // Guard: if the status is tracking a different job (concurrent start), stop waiting
         if (status.jobId !== jobId) {
           console.error(`Warning: render status is now tracking a different job (${status.jobId}). Exiting --wait.`);
           printResult(status);
@@ -286,6 +218,23 @@ renderCmd
 
 const voicesCmd = program.command('voices').description('Browse and preview available voices');
 
+/** Resolve API env: explicit --env flag wins, then stored auth, then default 'production'. */
+function resolveApiEnv(): ApiEnv {
+  const opts = program.opts();
+  const explicitEnv = process.argv.some((a) => a === '--env' || a.startsWith('--env='));
+  const env = (explicitEnv ? opts['env'] : loadAuth()?.env ?? opts['env'] ?? 'production') as string;
+  if (env !== 'dev' && env !== 'production') {
+    console.error(`Error: --env must be "dev" or "production", got "${env}"`);
+    process.exit(1);
+  }
+  return env;
+}
+
+/** Resolve the API base URL using resolveApiEnv(). */
+function getApiBaseUrl(): string {
+  return API_BASE_URLS[resolveApiEnv()];
+}
+
 const voiceDtoSchema = z.object({
   id: z.string(),
   provider: z.string(),
@@ -301,8 +250,6 @@ const voiceDtoSchema = z.object({
 const voicesResponseSchema = z.object({
   voices: z.array(voiceDtoSchema),
 });
-
-const AUDIO_CACHE_DIR = join(homedir(), '.config', 'neuralingual', 'audio');
 
 voicesCmd
   .command('show', { isDefault: true })
@@ -396,6 +343,16 @@ voicesCmd
 
 const setCmd = program.command('set').description('Export/import a complete affirmation set as a YAML file');
 
+/** Read all of stdin and return as a string. */
+function readStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    process.stdin.on('error', reject);
+  });
+}
+
 /** Read content from --file <path>, --file - (stdin), or piped stdin. */
 async function readContentFromFileOrStdin(opts: { file?: string }): Promise<string> {
   if (opts.file === '-') {
@@ -433,82 +390,6 @@ function buildRenderInputFromParsed(
   if (parsed.preamble !== undefined) input.includePreamble = parsed.preamble;
   if (parsed.playAll !== undefined) input.playAll = parsed.playAll;
   return input;
-}
-
-/**
- * Fetch set file data using user API.
- * Maps the user intent detail shape to SetFileData.
- */
-async function fetchSetFileData(client: UserApiClient, intentId: string): Promise<SetFileData> {
-  const { intent } = await client.getIntent(intentId);
-  if (!intent) {
-    throw new Error(`Intent not found: ${intentId}`);
-  }
-
-  // Get latest affirmation set (first in the desc-ordered array)
-  const latestSet = intent.affirmationSets[0];
-  const affirmations: SetFileData['affirmations'] = (latestSet?.affirmations ?? []).map((a, idx) => ({
-    id: a.id,
-    setId: latestSet?.id ?? '',
-    text: a.text,
-    tone: a.tone,
-    intensity: 3,
-    length: a.text.length < 60 ? 'short' : 'medium',
-    tags: [],
-    weight: 3,
-    isFavorite: false,
-    isEnabled: a.isEnabled,
-    orderIndex: idx,
-    createdAt: '',
-    updatedAt: '',
-  }));
-
-  // Get render config scoped to the latest affirmation set (matching the info command pattern).
-  // Without scoping, we could export a stale config from an older set.
-  const latestSetId = latestSet?.id;
-  const latestConfig = (latestSetId
-    ? intent.renderConfigs.find((rc) => rc.affirmationSetId === latestSetId)
-    : intent.renderConfigs[0]) ?? null;
-  const renderConfig: SetFileData['renderConfig'] = latestConfig ? {
-    id: latestConfig.id,
-    intentId: intent.id,
-    affirmationSetId: latestConfig.affirmationSetId,
-    voiceId: latestConfig.voiceId,
-    voiceProvider: latestConfig.voiceProvider,
-    sessionContext: latestConfig.sessionContext as SessionContext,
-    paceWpm: latestConfig.paceWpm,
-    durationSeconds: latestConfig.durationSeconds,
-    backgroundAudioPath: latestConfig.backgroundAudioPath,
-    backgroundVolume: latestConfig.backgroundVolume,
-    affirmationRepeatCount: latestConfig.affirmationRepeatCount,
-    includePreamble: latestConfig.includePreamble,
-    playAll: latestConfig.playAll,
-    createdAt: latestConfig.createdAt,
-    updatedAt: latestConfig.updatedAt,
-  } : null;
-
-  // Map user intent detail to the Intent type expected by SetFileData.
-  // User intents don't have catalog fields — default them.
-  const mappedIntent: Intent = {
-    id: intent.id,
-    userId: '',
-    title: intent.title,
-    emoji: intent.emoji,
-    rawText: intent.rawText,
-    tonePreference: (intent.tonePreference as TonePreference) ?? null,
-    sessionContext: intent.sessionContext as SessionContext,
-    isCatalog: false,
-    catalogSlug: null,
-    catalogCategory: null,
-    catalogSubtitle: null,
-    catalogDescription: null,
-    catalogOrder: null,
-    createdAt: intent.createdAt,
-    updatedAt: intent.updatedAt,
-    archivedAt: null,
-  };
-
-  return { intent: mappedIntent, affirmations, renderConfig };
 }
 
 setCmd
@@ -631,7 +512,7 @@ setCmd
     await createSetFromFile(client, parsed);
   });
 
-/** Create a new intent from a parsed set file. */
+/** Create a new intent from a parsed set file using user API. */
 async function createSetFromFile(client: UserApiClient, parsed: ReturnType<typeof parseSetFile>): Promise<void> {
   if (!parsed.affirmations || parsed.affirmations.length === 0) {
     console.error('Error: "affirmations" are required to create a new set');
@@ -693,8 +574,121 @@ async function createSetFromFile(client: UserApiClient, parsed: ReturnType<typeo
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// User-facing commands (JWT auth)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Get a user client from stored auth. Exits with helpful message if not logged in. */
+function getUserClient(): UserApiClient {
+  try {
+    return UserApiClient.fromAuth();
+  } catch {
+    console.error('Not logged in. Run `neuralingual login` first.');
+    process.exit(1);
+  }
+}
+
 /**
- * Apply a parsed set file's changes to an existing intent.
+ * Resolve a short/truncated intent ID to the full ID by fetching the user's library.
+ * Handles exact match, prefix match, and ambiguous matches (multiple prefix hits).
+ */
+async function resolveIntentId(client: UserApiClient, shortId: string): Promise<string> {
+  const { items } = await client.getLibrary();
+  const exact = items.find((i) => i.intent.id === shortId);
+  if (exact) return exact.intent.id;
+
+  const prefixMatches = items.filter((i) => i.intent.id.startsWith(shortId));
+  if (prefixMatches.length === 1) return prefixMatches[0]!.intent.id;
+  if (prefixMatches.length > 1) {
+    console.error(`Error: ambiguous ID "${shortId}" matches ${prefixMatches.length} intents:`);
+    for (const m of prefixMatches) {
+      console.error(`  ${m.intent.id.slice(0, 12)}  ${m.intent.title ?? '(untitled)'}`);
+    }
+    process.exit(1);
+  }
+
+  console.error(`Error: no practice set found matching "${shortId}"`);
+  process.exit(1);
+}
+
+/**
+ * Fetch set file data using user API.
+ * Maps the user intent detail shape to SetFileData.
+ */
+async function fetchSetFileData(client: UserApiClient, intentId: string): Promise<SetFileData> {
+  const { intent } = await client.getIntent(intentId);
+  if (!intent) {
+    throw new Error(`Intent not found: ${intentId}`);
+  }
+
+  // Get latest affirmation set (first in the desc-ordered array)
+  const latestSet = intent.affirmationSets[0];
+  const affirmations: SetFileData['affirmations'] = (latestSet?.affirmations ?? []).map((a, idx) => ({
+    id: a.id,
+    setId: latestSet?.id ?? '',
+    text: a.text,
+    tone: a.tone,
+    intensity: 3,
+    length: a.text.length < 60 ? 'short' : 'medium',
+    tags: [],
+    weight: 3,
+    isFavorite: false,
+    isEnabled: a.isEnabled,
+    orderIndex: idx,
+    createdAt: '',
+    updatedAt: '',
+  }));
+
+  // Get render config scoped to the latest affirmation set (matching the info command pattern).
+  // Without scoping, we could export a stale config from an older set.
+  const latestSetId = latestSet?.id;
+  const latestConfig = (latestSetId
+    ? intent.renderConfigs.find((rc) => rc.affirmationSetId === latestSetId)
+    : intent.renderConfigs[0]) ?? null;
+  const renderConfig: SetFileData['renderConfig'] = latestConfig ? {
+    id: latestConfig.id,
+    intentId: intent.id,
+    affirmationSetId: latestConfig.affirmationSetId,
+    voiceId: latestConfig.voiceId,
+    voiceProvider: latestConfig.voiceProvider,
+    sessionContext: latestConfig.sessionContext as SessionContext,
+    paceWpm: latestConfig.paceWpm,
+    durationSeconds: latestConfig.durationSeconds,
+    backgroundAudioPath: latestConfig.backgroundAudioPath,
+    backgroundVolume: latestConfig.backgroundVolume,
+    affirmationRepeatCount: latestConfig.affirmationRepeatCount,
+    includePreamble: latestConfig.includePreamble,
+    playAll: latestConfig.playAll,
+    createdAt: latestConfig.createdAt,
+    updatedAt: latestConfig.updatedAt,
+  } : null;
+
+  // Map user intent detail to the Intent type expected by SetFileData.
+  // User intents don't have catalog fields — default them.
+  const mappedIntent: Intent = {
+    id: intent.id,
+    userId: '',
+    title: intent.title,
+    emoji: intent.emoji,
+    rawText: intent.rawText,
+    tonePreference: (intent.tonePreference as TonePreference) ?? null,
+    sessionContext: intent.sessionContext as SessionContext,
+    isCatalog: false,
+    catalogSlug: null,
+    catalogCategory: null,
+    catalogSubtitle: null,
+    catalogDescription: null,
+    catalogOrder: null,
+    createdAt: intent.createdAt,
+    updatedAt: intent.updatedAt,
+    archivedAt: null,
+  };
+
+  return { intent: mappedIntent, affirmations, renderConfig };
+}
+
+/**
+ * Apply a parsed set file using user API.
  */
 async function applySetFile(
   client: UserApiClient,
@@ -732,7 +726,7 @@ async function applySetFile(
     changes.push(`intent: updated ${Object.keys(intentUpdates).join(', ')}`);
   }
 
-  // 2. Affirmation sync (declarative — YAML list is source of truth)
+  // 2. Affirmation sync (declarative)
   if (parsed.affirmations && parsed.affirmations.length > 0) {
     const missingIds = parsed.affirmations.filter((a) => !a.id);
     if (missingIds.length > 0 && originalData.affirmations.length > 0) {
@@ -940,7 +934,7 @@ async function browserLogin(env: ApiEnv): Promise<void> {
 
 program
   .command('login')
-  .description('Log in to Neuralingual (Apple Sign-In via browser)')
+  .description('Log in to Neuralingual via Apple Sign-In (opens browser)')
   .option('--env <env>', 'API environment: dev or production', 'production')
   .action(async (opts: { env: string }) => {
     const env = opts.env as ApiEnv;
@@ -1386,6 +1380,8 @@ program
 
 // ─── play ──────────────────────────────────────────────────────────────────
 
+const AUDIO_CACHE_DIR = join(homedir(), '.config', 'neuralingual', 'audio');
+
 program
   .command('play <intent-id>')
   .description('Download rendered audio (prints file path). Use --open to launch in default player.')
@@ -1480,6 +1476,17 @@ program
   });
 
 // ─── delete ────────────────────────────────────────────────────────────────
+
+/** Prompt the user for input on stdin. */
+function prompt(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
 
 program
   .command('delete <intent-id>')
