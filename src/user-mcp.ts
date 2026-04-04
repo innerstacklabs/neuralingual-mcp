@@ -227,7 +227,7 @@ async function applySetFile(
       const rc = originalData.renderConfig;
       const input: RenderConfigInput = {
         voiceId: parsed.voice ?? rc.voiceId ?? '',
-        sessionContext: (parsed.renderContext ?? rc.sessionContext ?? 'general') as SessionContext,
+        sessionContext: (parsed.renderContext ?? rc.sessionContext ?? parsed.intentContext ?? 'general') as SessionContext,
         durationMinutes: parsed.duration ?? Math.round(rc.durationSeconds / 60),
       };
       if (parsed.pace !== undefined) input.paceWpm = parsed.pace;
