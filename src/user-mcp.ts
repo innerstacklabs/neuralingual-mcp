@@ -9,7 +9,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { z } from 'zod';
@@ -32,9 +32,6 @@ const SERVER_VERSION = '0.2.0';
 const AUDIO_CACHE_DIR = join(homedir(), '.config', 'neuralingual', 'audio');
 
 const toneSchema = z.enum(['grounded', 'open', 'mystical']).optional();
-const contextSchema = z
-  .enum(['general', 'sleep', 'nap', 'meditation', 'workout', 'focus', 'walk', 'chores'])
-  .optional();
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
