@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SHEBANG = '#!/usr/bin/env node\n';
 
-for (const file of ['dist/cli.js']) {
+for (const file of ['dist/cli.js', 'dist/user-mcp.js']) {
   const filePath = resolve(__dirname, '..', file);
   const content = readFileSync(filePath, 'utf8');
   if (!content.startsWith('#!')) {
