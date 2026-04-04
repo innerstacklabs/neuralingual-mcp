@@ -1,0 +1,41 @@
+{
+  "name": "@innerstacklabs/neuralingual-mcp",
+  "version": "0.1.0",
+  "description": "Neuralingual CLI — AI-powered affirmation practice sets",
+  "type": "module",
+  "bin": {
+    "neuralingual": "./dist/cli.js"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  },
+  "engines": {
+    "node": "^20.20.0 || ^22.22.0 || >=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/innerstacklabs/neuralingual-mcp.git"
+  },
+  "keywords": [
+    "neuralingual",
+    "mcp",
+    "affirmations",
+    "ai",
+    "claude"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/innerstacklabs/neuralingual-mcp#readme",
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "typescript": "~5.8.0"
+  }
+}
