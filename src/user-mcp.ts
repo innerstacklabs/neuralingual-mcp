@@ -214,6 +214,7 @@ async function applySetFile(
     parsed.duration !== undefined ||
     parsed.pace !== undefined ||
     parsed.renderContext !== undefined ||
+    parsed.intentContext !== undefined ||
     parsed.background !== undefined ||
     parsed.backgroundVolume !== undefined ||
     parsed.repeats !== undefined ||
