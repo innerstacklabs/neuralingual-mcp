@@ -72,6 +72,68 @@ neuralingual play <id> --open
 
 See the [User Guide](docs/USER_GUIDE.md) for detailed usage and examples.
 
+## MCP Server (AI Assistant Integration)
+
+This package includes an MCP server that lets AI assistants (Claude Code, etc.) manage your Neuralingual library directly.
+
+### Setup
+
+Add to your `.mcp.json` (Claude Code) or MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "neuralingual": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "-p", "@innerstacklabs/neuralingual-mcp", "neuralingual-mcp"]
+    }
+  }
+}
+```
+
+**Prerequisite:** Run `neuralingual login` first to authenticate.
+
+### MCP Tools
+
+| Tool | Description |
+|---|---|
+| `nl_library` | List all practice sets with title, context, render status |
+| `nl_info` | Full set details — affirmations, render config, share status |
+| `nl_search` | Search sets by keyword |
+| `nl_create` | Create a new set from intent text (costs 1 credit) |
+| `nl_delete` | Delete a practice set |
+| `nl_rename` | Update title and/or emoji |
+| `nl_play` | Download rendered audio to local cache |
+| `nl_credits` | Check credit balance |
+| `nl_voices` | List available voices with accent, gender, tier |
+| `nl_render_configure` | Configure voice, background, pace, duration, context |
+| `nl_render_start` | Start audio rendering |
+| `nl_render_status` | Check render progress |
+| `nl_rerender` | Re-render with current config |
+| `nl_share` / `nl_unshare` | Generate or revoke public share links |
+| `nl_set_export` | Export set as editable YAML |
+| `nl_set_import` | Apply edited YAML back to a set |
+| `nl_sync_affirmations` | Declarative sync — add, update, remove affirmations |
+
+### Example (Claude Code)
+
+```
+> Create a neuralingual set about being a great father
+
+Creating "Present & Intentional Dad" with 30 affirmations...
+Drew on Fred Rogers, Brené Brown, and John Gottman.
+
+> Render it with Graham's voice, meditation context, 15 minutes
+
+Configured: Meditation · Graham · Acoustic Guitar · 15m
+Rendering... done.
+
+> Play it
+
+Downloaded to ~/.config/neuralingual/audio/abc123.mp3
+```
+
 ## License
 
 MIT

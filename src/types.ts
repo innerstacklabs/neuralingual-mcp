@@ -1,4 +1,4 @@
-/** Deployment environment for the API. */
+/** Deployment environment for the admin API. */
 export type ApiEnv = 'dev' | 'production';
 
 export const API_BASE_URLS: Record<ApiEnv, string> = {
@@ -66,6 +66,47 @@ export interface AffirmationSet {
   affirmations: Affirmation[];
 }
 
+export interface CreateIntentInput {
+  rawText: string;
+  tonePreference?: TonePreference | undefined;
+  sessionContext?: SessionContext | undefined;
+  isCatalog?: boolean | undefined;
+}
+
+export interface UpdateIntentInput {
+  tonePreference?: TonePreference | undefined;
+  sessionContext?: SessionContext | undefined;
+  title?: string | undefined;
+  rawText?: string | undefined;
+  emoji?: string | null | undefined;
+}
+
+export interface CatalogPublishInput {
+  slug: string;
+  category: string;
+  subtitle: string;
+  order: number;
+  description: string;
+  emoji?: string | undefined;
+}
+
+export interface UpdateAffirmationItem {
+  id: string;
+  text?: string | undefined;
+  isEnabled?: boolean | undefined;
+  tone?: string | undefined;
+  intensity?: number | undefined;
+}
+
+export interface UpdateAffirmationsInput {
+  affirmations: UpdateAffirmationItem[];
+}
+
+export interface UpdateAffirmationsResult {
+  affirmationSet: AffirmationSet;
+  updated: number;
+}
+
 export interface SyncAffirmationItem {
   id?: string | undefined;
   text: string;
@@ -83,6 +124,31 @@ export interface SyncAffirmationsResult {
   updated: number;
 }
 
+export interface IntentStats {
+  playCount: number;
+  completedCount: number;
+  lastPlayedAt: string | null;
+  totalListenSeconds: number;
+  createdAt: string;
+}
+
+export type LibrarySort = 'recent' | 'created' | 'most-played' | 'last-played' | 'title';
+export type LibraryFilter = 'has-audio' | 'no-audio' | 'never-played';
+
+export interface LibraryQueryParams {
+  sort?: LibrarySort | undefined;
+  filter?: LibraryFilter | undefined;
+  playedSince?: string | undefined;
+  notPlayedSince?: string | undefined;
+  context?: string | undefined;
+}
+
+export interface ListIntentsQuery {
+  isCatalog?: boolean | undefined;
+  page?: number | undefined;
+  pageSize?: number | undefined;
+}
+
 export interface RenderConfigInput {
   voiceId: string;
   sessionContext: SessionContext;
@@ -93,6 +159,7 @@ export interface RenderConfigInput {
   affirmationRepeatCount?: number | undefined;
   includePreamble?: boolean | undefined;
   playAll?: boolean | undefined;
+  repetitionModel?: 'sequential' | 'weighted_shuffle' | 'favorites_first' | undefined;
 }
 
 export interface RenderConfig {
@@ -107,6 +174,7 @@ export interface RenderConfig {
   backgroundAudioPath: string | null;
   backgroundVolume: number;
   affirmationRepeatCount: number;
+  repetitionModel: string;
   includePreamble: boolean;
   playAll: boolean;
   createdAt: string;
@@ -132,6 +200,22 @@ export interface RenderStatus {
   jobId?: string;
 }
 
+export interface PreambleTier {
+  brief: string | null;
+  standard: string | null;
+  extended: string | null;
+}
+
+export interface ContextPreambleConfig {
+  preamble: PreambleTier;
+  postamble: PreambleTier;
+}
+
+export interface PreambleUpdateInput {
+  preamble?: string | null | undefined;
+  postamble?: string | null | undefined;
+}
+
 export interface Voice {
   id: string;
   externalId: string;
@@ -143,3 +227,4 @@ export interface Voice {
   sortOrder: number;
   enabled: boolean;
 }
+

@@ -9,7 +9,7 @@ import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { UserApiClient } from './user-client.js';
 import { loadAuth, clearAuth } from './auth-store.js';
-import type { ApiEnv, Intent, RenderConfigInput, RenderStatus, SessionContext, TonePreference } from './types.js';
+import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderConfigInput, RenderStatus, SessionContext, TonePreference } from './types.js';
 import { API_BASE_URLS } from './types.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
 import { z } from 'zod';
@@ -22,9 +22,10 @@ const program = new Command();
 
 program
   .name('neuralingual')
-  .description('Neuralingual — AI-powered affirmation practice sets')
-  .version('0.2.0')
+  .description('Neuralingual CLI — AI-powered affirmation practice sets')
+  .version('0.1.0')
   .option('--env <env>', 'API environment: dev or production (default: production)', 'production');
+
 
 function printResult(data: unknown, isError = false): void {
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
@@ -49,329 +50,6 @@ function printTable(rows: string[][], headers: string[]): void {
   }
 }
 
-// ─── render ──────────────────────────────────────────────────────────────────
-
-const renderCmd = program.command('render').description('Render audio for an intent');
-
-renderCmd
-  .command('configure <intent-id>')
-  .description('Configure render settings for an intent')
-  .requiredOption('--voice <name>', 'Voice ID (externalId) to use for rendering')
-  .requiredOption('--context <context>', `Session context: ${VALID_CONTEXTS.join(', ')}`)
-  .requiredOption('--duration <minutes>', 'Duration in minutes', parseInt)
-  .option('--pace <wpm>', 'Pace in words per minute (uses context default if omitted)', parseInt)
-  .option('--background <key>', 'Background sound storageKey (use neuralingual voices list; omit to disable)')
-  .option('--background-volume <level>', 'Background volume 0–1 (uses context default if omitted)', parseFloat)
-  .option('--repeats <n>', 'Number of times each affirmation repeats (uses context default if omitted)', parseInt)
-  .option('--preamble <on|off>', 'Include intro/outro preamble: on or off (preserves existing setting if omitted)')
-  .option('--play-all <on|off>', 'Play all affirmations instead of fitting within duration: on or off (preserves existing setting if omitted)')
-  .action(async (
-    intentId: string,
-    opts: {
-      voice: string;
-      context: string;
-      duration: number;
-      pace?: number;
-      background?: string;
-      backgroundVolume?: number;
-      repeats?: number;
-      preamble?: string;
-      playAll?: string;
-    },
-  ) => {
-    if (!VALID_CONTEXTS.includes(opts.context)) {
-      console.error(`Error: --context must be one of: ${VALID_CONTEXTS.join(', ')}`);
-      process.exit(1);
-    }
-    if (isNaN(opts.duration) || opts.duration < 1) {
-      console.error('Error: --duration must be a positive integer');
-      process.exit(1);
-    }
-    if (opts.pace !== undefined && (isNaN(opts.pace) || opts.pace < 90 || opts.pace > 220)) {
-      console.error('Error: --pace must be between 90 and 220');
-      process.exit(1);
-    }
-    if (
-      opts.backgroundVolume !== undefined &&
-      (isNaN(opts.backgroundVolume) || opts.backgroundVolume < 0 || opts.backgroundVolume > 1)
-    ) {
-      console.error('Error: --background-volume must be between 0 and 1');
-      process.exit(1);
-    }
-    if (opts.repeats !== undefined && (isNaN(opts.repeats) || opts.repeats < 1 || opts.repeats > 5)) {
-      console.error('Error: --repeats must be between 1 and 5');
-      process.exit(1);
-    }
-    if (opts.preamble !== undefined && opts.preamble !== 'on' && opts.preamble !== 'off') {
-      console.error('Error: --preamble must be "on" or "off"');
-      process.exit(1);
-    }
-    if (opts.playAll !== undefined && opts.playAll !== 'on' && opts.playAll !== 'off') {
-      console.error('Error: --play-all must be "on" or "off"');
-      process.exit(1);
-    }
-
-    try {
-      const client = getUserClient();
-      const resolvedId = await resolveIntentId(client, intentId);
-      const input: Parameters<typeof client.configureRender>[1] = {
-        voiceId: opts.voice,
-        sessionContext: opts.context as SessionContext,
-        durationMinutes: opts.duration,
-      };
-      if (opts.pace !== undefined) input.paceWpm = opts.pace;
-      if (opts.background !== undefined) input.backgroundAudioPath = opts.background;
-      if (opts.backgroundVolume !== undefined) input.backgroundVolume = opts.backgroundVolume;
-      if (opts.repeats !== undefined) input.affirmationRepeatCount = opts.repeats;
-      if (opts.preamble !== undefined) input.includePreamble = opts.preamble === 'on';
-      if (opts.playAll !== undefined) input.playAll = opts.playAll === 'on';
-      const result = await client.configureRender(resolvedId, input);
-      printResult(result);
-    } catch (err: unknown) {
-      printResult(err instanceof Error ? err.message : String(err), true);
-    }
-  });
-
-renderCmd
-  .command('start <intent-id>')
-  .description('Start a render job for an intent')
-  .option('--wait', 'Wait for the render to complete, showing progress')
-  .action(async (intentId: string, opts: { wait?: boolean }) => {
-    const client = getUserClient();
-    const resolvedId = await resolveIntentId(client, intentId);
-
-    try {
-      const result = await client.startRender(resolvedId);
-      if (!opts.wait) {
-        printResult(result);
-        return;
-      }
-
-      const { jobId } = result;
-      console.error(`Render queued (job: ${jobId}). Waiting for completion...`);
-
-      // Poll until the specific job we started completes or fails
-      let elapsedMs = 0;
-      const POLL_INITIAL_MS = 3000;
-      const POLL_BACKOFF_AFTER_MS = 30000;
-      const POLL_BACKOFF_MS = 6000;
-
-      for (;;) {
-        const intervalMs = elapsedMs >= POLL_BACKOFF_AFTER_MS ? POLL_BACKOFF_MS : POLL_INITIAL_MS;
-        await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
-        elapsedMs += intervalMs;
-
-        let status: RenderStatus;
-        try {
-          status = await client.getRenderStatus(resolvedId);
-        } catch (pollErr: unknown) {
-          console.error(`Warning: status poll failed — ${pollErr instanceof Error ? pollErr.message : String(pollErr)}`);
-          continue;
-        }
-
-        // Guard: if status has no jobId at all, the render config was likely reconfigured
-        // and the job we started is no longer the current one — exit to avoid infinite loop
-        if (status.jobId === undefined) {
-          console.error(`Warning: render status has no active job (config may have been reconfigured). Exiting --wait.`);
-          printResult(status);
-          return;
-        }
-
-        // Guard: if the status is tracking a different job (concurrent start), stop waiting
-        if (status.jobId !== jobId) {
-          console.error(`Warning: render status is now tracking a different job (${status.jobId}). Exiting --wait.`);
-          printResult(status);
-          return;
-        }
-
-        console.error(`  [${Math.round(elapsedMs / 1000)}s] status=${status.status} progress=${status.progress}%`);
-
-        if (status.status === 'completed') {
-          printResult(status);
-          return;
-        }
-        if (status.status === 'failed') {
-          console.error(`Render failed: ${status.errorMessage ?? 'unknown error'}`);
-          process.exit(1);
-        }
-      }
-    } catch (err: unknown) {
-      printResult(err instanceof Error ? err.message : String(err), true);
-    }
-  });
-
-renderCmd
-  .command('status <intent-id>')
-  .description('Get the current render status for an intent')
-  .action(async (intentId: string) => {
-    const client = getUserClient();
-    try {
-      const resolvedId = await resolveIntentId(client, intentId);
-      const result = await client.getRenderStatus(resolvedId);
-      printResult(result);
-    } catch (err: unknown) {
-      printResult(err instanceof Error ? err.message : String(err), true);
-    }
-  });
-
-// ─── voices ──────────────────────────────────────────────────────────────────
-
-const voicesCmd = program.command('voices').description('Browse and preview available voices');
-
-/** Resolve API env: explicit --env flag wins, then stored auth, then default 'production'. */
-function resolveApiEnv(): ApiEnv {
-  const opts = program.opts();
-  const explicitEnv = process.argv.some((a) => a === '--env' || a.startsWith('--env='));
-  const env = (explicitEnv ? opts['env'] : loadAuth()?.env ?? opts['env'] ?? 'production') as string;
-  if (env !== 'dev' && env !== 'production') {
-    console.error(`Error: --env must be "dev" or "production", got "${env}"`);
-    process.exit(1);
-  }
-  return env;
-}
-
-/** Resolve the API base URL using resolveApiEnv(). */
-function getApiBaseUrl(): string {
-  return API_BASE_URLS[resolveApiEnv()];
-}
-
-const voiceDtoSchema = z.object({
-  id: z.string(),
-  provider: z.string(),
-  displayName: z.string(),
-  description: z.string().nullable(),
-  gender: z.string(),
-  accent: z.string(),
-  tier: z.string(),
-  category: z.string().nullable(),
-  playCount: z.number(),
-});
-
-const voicesResponseSchema = z.object({
-  voices: z.array(voiceDtoSchema),
-});
-
-voicesCmd
-  .command('show', { isDefault: true })
-  .description('List available voices')
-  .option('--gender <gender>', 'Filter by gender (e.g. Male, Female)')
-  .option('--accent <accent>', 'Filter by accent (e.g. US, UK, AU)')
-  .option('--tier <tier>', 'Filter by tier (e.g. free, premium)')
-  .option('--json', 'Output raw JSON')
-  .action(async (opts: { gender?: string; accent?: string; tier?: string; json?: boolean }) => {
-    try {
-      const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/voices`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      let { voices } = voicesResponseSchema.parse(await res.json());
-      if (opts.gender) {
-        const g = opts.gender.toLowerCase();
-        voices = voices.filter((v) => v.gender.toLowerCase() === g);
-      }
-      if (opts.accent) {
-        const a = opts.accent.toLowerCase();
-        voices = voices.filter((v) => v.accent.toLowerCase() === a);
-      }
-      if (opts.tier) {
-        const t = opts.tier.toLowerCase();
-        voices = voices.filter((v) => v.tier.toLowerCase() === t);
-      }
-      if (opts.json) {
-        console.log(JSON.stringify(voices, null, 2));
-        return;
-      }
-      if (voices.length === 0) {
-        console.log('No voices found matching your filters.');
-        return;
-      }
-      const truncate = (s: string | null, max: number) => {
-        if (!s) return '';
-        return s.length > max ? s.slice(0, max - 1) + '\u2026' : s;
-      };
-      printTable(
-        voices.map((v) => [v.id, v.displayName, v.gender, v.accent, v.tier, truncate(v.description, 50)]),
-        ['ID', 'NAME', 'GENDER', 'ACCENT', 'TIER', 'DESCRIPTION'],
-      );
-      console.log(`\nUse --voice <ID> with 'neuralingual render configure' to select a voice.`);
-      console.log(`Use 'neuralingual voices preview <ID>' to hear a voice sample.`);
-    } catch (err: unknown) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  });
-
-voicesCmd
-  .command('preview <voice-id>')
-  .description('Play a short audio preview of a voice')
-  .option('--no-cache', 'Skip cache, always re-download')
-  .action(async (voiceId: string, opts: { cache: boolean }) => {
-    try {
-      const baseUrl = getApiBaseUrl();
-      const env = resolveApiEnv();
-      // Sanitize voiceId for safe use as a filename component
-      const safeVoiceId = voiceId.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const cacheFile = join(AUDIO_CACHE_DIR, `preview-${env}-${safeVoiceId}.mp3`);
-      if (opts.cache && existsSync(cacheFile)) {
-        console.log(`Playing preview for '${voiceId}' (cached)`);
-      } else {
-        console.log(`Downloading preview for '${voiceId}'...`);
-        const res = await fetch(`${baseUrl}/voices/${encodeURIComponent(voiceId)}/preview`);
-        if (!res.ok) {
-          const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-          throw new Error(data && typeof data['error'] === 'string' ? data['error'] : `HTTP ${res.status}`);
-        }
-        const ab = await res.arrayBuffer();
-        mkdirSync(AUDIO_CACHE_DIR, { recursive: true });
-        writeFileSync(cacheFile, Buffer.from(ab));
-        console.log(`Playing preview for '${voiceId}'`);
-      }
-      const player = process.platform === 'darwin' ? 'afplay' : 'xdg-open';
-      const result = spawnSync(player, [cacheFile], { stdio: 'inherit' });
-      if (result.status !== 0) {
-        console.error('Playback failed. Try opening the file manually:');
-        console.log(cacheFile);
-      }
-      // Report play count (fire-and-forget, same as web client)
-      fetch(`${baseUrl}/voices/${encodeURIComponent(voiceId)}/play`, { method: 'POST' }).catch(() => {});
-    } catch (err: unknown) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  });
-
-// ─── set (declarative YAML file) ────────────────────────────────────────────
-
-const setCmd = program.command('set').description('Export/import a complete affirmation set as a YAML file');
-
-/** Read all of stdin and return as a string. */
-function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    process.stdin.on('error', reject);
-  });
-}
-
-/** Read content from --file <path>, --file - (stdin), or piped stdin. */
-async function readContentFromFileOrStdin(opts: { file?: string }): Promise<string> {
-  if (opts.file === '-') {
-    return readStdin();
-  }
-  if (opts.file) {
-    try {
-      return readFileSync(opts.file, 'utf8');
-    } catch (err: unknown) {
-      console.error(`Error: could not read file '${opts.file}': ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  }
-  if (process.stdin.isTTY) {
-    console.error('Error: provide YAML via --file <path> or pipe to stdin (--file -)');
-    process.exit(1);
-  }
-  return readStdin();
-}
 
 /** Build a RenderConfigInput from parsed YAML fields. Used by set create and set apply. */
 function buildRenderInputFromParsed(
@@ -389,193 +67,13 @@ function buildRenderInputFromParsed(
   if (parsed.repeats !== undefined) input.affirmationRepeatCount = parsed.repeats;
   if (parsed.preamble !== undefined) input.includePreamble = parsed.preamble;
   if (parsed.playAll !== undefined) input.playAll = parsed.playAll;
+  if (parsed.repetitionModel !== undefined) input.repetitionModel = parsed.repetitionModel;
   return input;
 }
 
-setCmd
-  .command('export <intent-id>')
-  .description('Export an affirmation set to YAML (stdout)')
-  .action(async (intentId: string) => {
-    const client = getUserClient();
-    try {
-      const resolvedId = await resolveIntentId(client, intentId);
-      const data = await fetchSetFileData(client, resolvedId);
-      process.stdout.write(serializeSetFile(data));
-    } catch (err: unknown) {
-      printResult(err instanceof Error ? err.message : String(err), true);
-    }
-  });
-
-setCmd
-  .command('edit <intent-id>')
-  .description('Open a set file in $EDITOR, then apply changes')
-  .action(async (intentId: string) => {
-    const client = getUserClient();
-
-    const resolvedId = await resolveIntentId(client, intentId);
-
-    let originalData: SetFileData;
-    try {
-      originalData = await fetchSetFileData(client, resolvedId);
-    } catch (err: unknown) {
-      printResult(err instanceof Error ? err.message : String(err), true);
-      return;
-    }
-
-    const yaml = serializeSetFile(originalData);
-    const isTTY = Boolean(process.stdout.isTTY && process.stdin.isTTY);
-
-    if (!isTTY) {
-      console.error(
-        'Error: no TTY available for interactive editor. Use one of:\n' +
-        '  neuralingual set export <id>                     Print YAML to stdout\n' +
-        '  neuralingual set apply <id> --file <path>        Apply from a file\n' +
-        '  neuralingual set apply <id> --file -             Apply from stdin',
-      );
-      process.exit(1);
-    }
-
-    const editorEnv = (process.env['EDITOR'] ?? 'vi').trim();
-    if (!editorEnv) {
-      console.error('Error: $EDITOR is empty. Set it to your preferred editor.');
-      process.exit(1);
-    }
-
-    const tmpFile = join(tmpdir(), `nl-set-${resolvedId}-${Date.now()}.yaml`);
-    writeFileSync(tmpFile, yaml, 'utf8');
-
-    const spawnResult = spawnSync(`${editorEnv} ${JSON.stringify(tmpFile)}`, { stdio: 'inherit', shell: true });
-    if (spawnResult.error) {
-      unlinkSync(tmpFile);
-      console.error(`Error: could not open editor '${editorEnv}': ${spawnResult.error.message}`);
-      process.exit(1);
-    }
-    if (spawnResult.status !== 0) {
-      unlinkSync(tmpFile);
-      console.error(`Editor exited with status ${spawnResult.status ?? 'unknown'}. No changes applied.`);
-      process.exit(1);
-    }
-
-    let editedContent: string;
-    try {
-      editedContent = readFileSync(tmpFile, 'utf8');
-    } finally {
-      unlinkSync(tmpFile);
-    }
-
-    try {
-      await applySetFile(client, resolvedId, editedContent, originalData);
-    } catch (err: unknown) {
-      printResult(err instanceof Error ? err.message : String(err), true);
-    }
-  });
-
-setCmd
-  .command('apply <intent-id>')
-  .description('Apply a YAML set file to an existing intent')
-  .option('--file <path>', 'Read YAML from a file (use "-" for stdin)')
-  .action(async (intentId: string, opts: { file?: string }) => {
-    const client = getUserClient();
-    const content = await readContentFromFileOrStdin(opts);
-
-    const resolvedId = await resolveIntentId(client, intentId);
-
-    try {
-      const originalData = await fetchSetFileData(client, resolvedId);
-      await applySetFile(client, resolvedId, content, originalData);
-    } catch (err: unknown) {
-      printResult(err instanceof Error ? err.message : String(err), true);
-    }
-  });
-
-setCmd
-  .command('create')
-  .description('Create a new intent from a YAML set file (full round-trip)')
-  .option('--file <path>', 'Read YAML from a file (use "-" for stdin)')
-  .action(async (opts: { file?: string }) => {
-    const client = getUserClient();
-    const content = await readContentFromFileOrStdin(opts);
-
-    let parsed;
-    try {
-      parsed = parseSetFile(content);
-    } catch (err: unknown) {
-      console.error(`Error: invalid YAML — ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-
-    if (!parsed.intent) {
-      console.error('Error: "intent" field is required to create a new set');
-      process.exit(1);
-    }
-
-    await createSetFromFile(client, parsed);
-  });
-
-/** Create a new intent from a parsed set file using user API. */
-async function createSetFromFile(client: UserApiClient, parsed: ReturnType<typeof parseSetFile>): Promise<void> {
-  if (!parsed.affirmations || parsed.affirmations.length === 0) {
-    console.error('Error: "affirmations" are required to create a new set');
-    process.exit(1);
-  }
-
-  let createdIntentId: string | undefined;
-  try {
-    const steps: string[] = [];
-
-    // 1. Create intent + affirmations together via POST /intents/manual
-    const title = parsed.title ?? parsed.intent!.slice(0, 120);
-    const result = await client.createManualIntent({
-      title,
-      rawText: parsed.intent!,
-      tonePreference: parsed.tone ?? null,
-      sessionContext: parsed.intentContext,
-      affirmations: parsed.affirmations.map((a) => ({ text: a.text })),
-    });
-    createdIntentId = result.intent.id;
-    steps.push(`intent: created with ${result.affirmationSet.affirmations.length} affirmations`);
-
-    // 2. Update emoji if specified (not part of manual create)
-    if (parsed.emoji !== undefined) {
-      await client.updateIntent(result.intent.id, { emoji: parsed.emoji });
-      steps.push('intent: updated emoji');
-    }
-
-    // 3. Sync affirmations to set enabled/disabled state
-    // The manual create endpoint doesn't support per-affirmation enabled state,
-    // so we sync to apply the exact desired state from the YAML.
-    const hasDisabled = parsed.affirmations.some((a) => !a.enabled);
-    if (hasDisabled) {
-      await client.syncAffirmations(result.intent.id, {
-        affirmations: parsed.affirmations.map((a) => ({
-          text: a.text,
-          enabled: a.enabled,
-        })),
-      });
-      steps.push('affirmations: synced enabled/disabled state');
-    }
-
-    // 4. Configure render (if voice is specified)
-    if (parsed.voice) {
-      await client.configureRender(result.intent.id, buildRenderInputFromParsed(parsed));
-      steps.push('render config: created');
-    }
-
-    console.log(`Created intent: ${result.intent.id}`);
-    for (const s of steps) {
-      console.error(`  - ${s}`);
-    }
-  } catch (err: unknown) {
-    if (createdIntentId) {
-      console.error(`Error during set create. Partial intent was created: ${createdIntentId}`);
-      console.error(`Clean up with: neuralingual delete ${createdIntentId}`);
-    }
-    printResult(err instanceof Error ? err.message : String(err), true);
-  }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// User-facing commands (JWT auth)
+// User-facing commands (JWT auth, not admin key)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /** Get a user client from stored auth. Exits with helpful message if not logged in. */
@@ -583,14 +81,16 @@ function getUserClient(): UserApiClient {
   try {
     return UserApiClient.fromAuth();
   } catch {
-    console.error('Not logged in. Run `neuralingual login` first.');
+    console.error('Not logged in. Run `nl login` first.');
     process.exit(1);
   }
 }
 
+
 /**
  * Resolve a short/truncated intent ID to the full ID by fetching the user's library.
  * Handles exact match, prefix match, and ambiguous matches (multiple prefix hits).
+ * Only works for user-authenticated clients (UserApiClient has getLibrary()).
  */
 async function resolveIntentId(client: UserApiClient, shortId: string): Promise<string> {
   const { items } = await client.getLibrary();
@@ -611,11 +111,12 @@ async function resolveIntentId(client: UserApiClient, shortId: string): Promise<
   process.exit(1);
 }
 
+
 /**
  * Fetch set file data using user API.
  * Maps the user intent detail shape to SetFileData.
  */
-async function fetchSetFileData(client: UserApiClient, intentId: string): Promise<SetFileData> {
+async function fetchSetFileDataUser(client: UserApiClient, intentId: string): Promise<SetFileData> {
   const { intent } = await client.getIntent(intentId);
   if (!intent) {
     throw new Error(`Intent not found: ${intentId}`);
@@ -657,6 +158,7 @@ async function fetchSetFileData(client: UserApiClient, intentId: string): Promis
     backgroundAudioPath: latestConfig.backgroundAudioPath,
     backgroundVolume: latestConfig.backgroundVolume,
     affirmationRepeatCount: latestConfig.affirmationRepeatCount,
+    repetitionModel: latestConfig.repetitionModel,
     includePreamble: latestConfig.includePreamble,
     playAll: latestConfig.playAll,
     createdAt: latestConfig.createdAt,
@@ -689,8 +191,9 @@ async function fetchSetFileData(client: UserApiClient, intentId: string): Promis
 
 /**
  * Apply a parsed set file using user API.
+ * Silently skips admin-only fields (catalog, sessionContext on intent).
  */
-async function applySetFile(
+async function applySetFileUser(
   client: UserApiClient,
   intentId: string,
   content: string,
@@ -720,6 +223,8 @@ async function applySetFile(
   if (parsed.emoji !== undefined && parsed.emoji !== originalData.intent.emoji) {
     intentUpdates.emoji = parsed.emoji;
   }
+  // Note: intentContext/sessionContext changes silently skipped for user auth
+  // (user update API doesn't support sessionContext)
 
   if (Object.keys(intentUpdates).length > 0) {
     await client.updateIntent(intentId, intentUpdates);
@@ -767,12 +272,23 @@ async function applySetFile(
 
   if (hasRenderFields) {
     if (!originalData.renderConfig) {
-      console.error('Warning: no render config exists yet — skipping render settings. Run neuralingual render configure first.');
+      console.error('Warning: no render config exists yet — skipping render settings. Run nl render configure first.');
     } else {
       const rc = originalData.renderConfig;
       await client.configureRender(intentId, buildRenderInputFromParsed(parsed, rc));
       changes.push('render config: updated');
     }
+  }
+
+  // 4. Catalog fields silently skipped for user auth
+  const hasCatalogFields = parsed.slug !== undefined ||
+    parsed.category !== undefined ||
+    parsed.description !== undefined ||
+    parsed.subtitle !== undefined ||
+    parsed.order !== undefined;
+
+  if (hasCatalogFields) {
+    console.error('Note: catalog fields (slug, category, description, etc.) are admin-only and were skipped.');
   }
 
   if (changes.length === 0) {
@@ -843,9 +359,9 @@ async function browserLogin(env: ApiEnv): Promise<void> {
       }
       const body = Buffer.concat(chunks).toString('utf8');
 
-      let bodyParsed: unknown;
+      let parsed: unknown;
       try {
-        bodyParsed = JSON.parse(body);
+        parsed = JSON.parse(body);
       } catch {
         res.writeHead(400, {
           'Content-Type': 'application/json',
@@ -855,7 +371,7 @@ async function browserLogin(env: ApiEnv): Promise<void> {
         return;
       }
 
-      const result = callbackPayloadSchema.safeParse(bodyParsed);
+      const result = callbackPayloadSchema.safeParse(parsed);
       if (!result.success) {
         res.writeHead(400, {
           'Content-Type': 'application/json',
@@ -934,7 +450,7 @@ async function browserLogin(env: ApiEnv): Promise<void> {
 
 program
   .command('login')
-  .description('Log in to Neuralingual via Apple Sign-In (opens browser)')
+  .description('Log in to Neuralingual (Apple Sign-In via browser)')
   .option('--env <env>', 'API environment: dev or production', 'production')
   .action(async (opts: { env: string }) => {
     const env = opts.env as ApiEnv;
@@ -942,7 +458,6 @@ program
       console.error('Error: --env must be "dev" or "production"');
       process.exit(1);
     }
-
     try {
       await browserLogin(env);
     } catch (err: unknown) {
@@ -1148,7 +663,7 @@ program
         console.log();
       } else {
         console.log('Render Config: not configured');
-        console.log(`  Configure with: neuralingual render configure ${intent.id.slice(0, 8)} --voice <id> --context ${intent.sessionContext} --duration <min>`);
+        console.log(`  Configure with: nl render configure ${intent.id.slice(0, 8)} --voice <id> --context ${intent.sessionContext} --duration <min>`);
         console.log();
       }
 
@@ -1230,7 +745,7 @@ program
       }
       if (!intent.renderConfigs || intent.renderConfigs.length === 0) {
         console.error('Error: no render config found. Configure first with:');
-        console.error(`  neuralingual render configure ${intent.id.slice(0, 8)} --voice <id> --context ${intent.sessionContext} --duration <min>`);
+        console.error(`  nl render configure ${intent.id.slice(0, 8)} --voice <id> --context ${intent.sessionContext} --duration <min>`);
         process.exit(1);
       }
 
@@ -1317,7 +832,7 @@ program
       for (const a of affirmationSet.affirmations) {
         console.log(`  ${a.isEnabled ? '[x]' : '[ ]'} ${a.text}`);
       }
-      console.log(`\nNext: configure and render with \`neuralingual render configure ${intent.id.slice(0, 8)} --voice <id> --context ${intent.sessionContext} --duration <min>\``);
+      console.log(`\nNext: configure and render with \`nl render ${intent.id}\``);
     } catch (err: unknown) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -1400,7 +915,7 @@ program
       }
       const renderJob = item.latestRenderJob;
       if (!renderJob?.id) {
-        console.error('Error: no rendered audio available. Run `neuralingual render start` first.');
+        console.error('Error: no rendered audio available. Run `nl render start` first.');
         process.exit(1);
       }
       if (renderJob.status !== 'completed') {
@@ -1488,29 +1003,199 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+/**
+ * Parse a duration string like "7d", "30d", "2w" into an ISO date string
+ * representing `now - duration`.
+ */
+function parseDurationToIsoDate(duration: string): string {
+  const match = duration.match(/^(\d+)([dwDW])$/);
+  if (!match) {
+    throw new Error(`Invalid duration "${duration}". Use format like "7d" (days) or "2w" (weeks).`);
+  }
+  const value = parseInt(match[1]!, 10);
+  const unit = match[2]!.toLowerCase();
+  const days = unit === 'w' ? value * 7 : value;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  return cutoff.toISOString();
+}
+
+interface LibraryItemForFilter {
+  intent: { id: string; title: string; emoji: string | null; sessionContext: string };
+  latestRenderJob: { status: string } | null;
+  configs?: Array<{ latestRenderJob: { status: string } | null }>;
+  stats?: { playCount: number; lastPlayedAt: string | null };
+}
+
+/**
+ * Fetch library items matching the given filter criteria.
+ * Uses server-side filtering via query params where possible.
+ */
+async function getFilteredLibraryItems(
+  client: UserApiClient,
+  filter?: string,
+  notPlayedSince?: string,
+): Promise<LibraryItemForFilter[]> {
+  const params: LibraryQueryParams = {};
+
+  // Map CLI filter names to API filter param
+  if (filter === 'no-audio' || filter === 'has-audio' || filter === 'never-played') {
+    params.filter = filter as LibraryFilter;
+  }
+
+  // Parse duration for not-played-since
+  if (notPlayedSince) {
+    params.notPlayedSince = parseDurationToIsoDate(notPlayedSince);
+  }
+
+  const { items } = await client.getLibrary(params);
+  return items;
+}
+
+/** Print a table of library items for confirmation display. */
+function printFilteredItems(items: LibraryItemForFilter[]): void {
+  const rows = items.map((item) => {
+    const hasAudio =
+      item.configs?.some((c) => c.latestRenderJob?.status === 'completed') ??
+      item.latestRenderJob?.status === 'completed';
+    return [
+      item.intent.id.slice(0, 8),
+      item.intent.emoji ?? '',
+      item.intent.title ?? '(untitled)',
+      item.intent.sessionContext,
+      hasAudio ? 'yes' : 'no',
+      String(item.stats?.playCount ?? 0),
+      item.stats?.lastPlayedAt ? new Date(item.stats.lastPlayedAt).toLocaleDateString() : 'never',
+    ];
+  });
+  printTable(rows, ['ID', '', 'Title', 'Context', 'Audio', 'Plays', 'Last Played']);
+}
+
 program
-  .command('delete <intent-id>')
-  .description('Delete a practice set from your library')
+  .command('delete [intent-id]')
+  .description('Delete practice sets from your library. Pass an ID for single delete, or use filters for bulk delete.')
   .option('-f, --force', 'Skip confirmation prompt')
-  .action(async (intentId: string, opts: { force?: boolean }) => {
+  .option('--filter <filter>', 'Filter: no-audio, has-audio, never-played')
+  .option('--not-played-since <duration>', 'Delete sets not played in N days/weeks (e.g. 7d, 2w)')
+  .action(async (intentId: string | undefined, opts: { force?: boolean; filter?: string; notPlayedSince?: string }) => {
+    const hasFilters = opts.filter !== undefined || opts.notPlayedSince !== undefined;
+
+    if (intentId && hasFilters) {
+      console.error('Error: provide either an intent ID or filter flags, not both.');
+      process.exit(1);
+    }
+    if (!intentId && !hasFilters) {
+      console.error('Error: provide an intent ID or use filter flags (--filter, --not-played-since).');
+      console.error('  Examples:');
+      console.error('    nl delete abc12345');
+      console.error('    nl delete --filter no-audio');
+      console.error('    nl delete --not-played-since 7d');
+      process.exit(1);
+    }
+
+    const validFilters = ['no-audio', 'has-audio', 'never-played'];
+    if (opts.filter && !validFilters.includes(opts.filter)) {
+      console.error(`Error: --filter must be one of: ${validFilters.join(', ')}`);
+      process.exit(1);
+    }
+
     const client = getUserClient();
 
     try {
-      const resolvedId = await resolveIntentId(client, intentId);
-      // Look up the title for the confirmation prompt
+      // Single-ID delete (backward compatible)
+      if (intentId) {
+        const resolvedId = await resolveIntentId(client, intentId);
+        if (!opts.force) {
+          const { items } = await client.getLibrary();
+          const item = items.find((i) => i.intent.id === resolvedId);
+          const name = item ? `'${item.intent.title ?? '(untitled)'}'` : resolvedId;
+          const answer = await prompt(`Delete ${name}? This cannot be undone. (y/N) `);
+          if (answer.toLowerCase() !== 'y') {
+            console.log('Cancelled.');
+            return;
+          }
+        }
+        await client.deleteIntent(resolvedId);
+        console.log('Deleted.');
+        return;
+      }
+
+      // Filter-based bulk delete
+      const items = await getFilteredLibraryItems(client, opts.filter, opts.notPlayedSince);
+
+      if (items.length === 0) {
+        console.log('No matching practice sets found.');
+        return;
+      }
+
+      console.log(`Found ${items.length} matching practice set(s):\n`);
+      printFilteredItems(items);
+      console.log();
+
       if (!opts.force) {
-        const { items } = await client.getLibrary();
-        const item = items.find((i) => i.intent.id === resolvedId);
-        const name = item ? `'${item.intent.title ?? '(untitled)'}'` : resolvedId;
-        const answer = await prompt(`Delete ${name}? This cannot be undone. (y/N) `);
+        const answer = await prompt(`Delete ${items.length} set(s)? This cannot be undone. (y/N) `);
         if (answer.toLowerCase() !== 'y') {
           console.log('Cancelled.');
           return;
         }
       }
 
-      await client.deleteIntent(resolvedId);
-      console.log('Deleted.');
+      // Bulk delete in batches of 50
+      const ids = items.map((i) => i.intent.id);
+      let totalDeleted = 0;
+      for (let i = 0; i < ids.length; i += 50) {
+        const batch = ids.slice(i, i + 50);
+        const result = await client.bulkDeleteIntents(batch);
+        totalDeleted += result.deleted;
+      }
+      console.log(`Deleted ${totalDeleted} practice set(s).`);
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+// ─── cleanup (dry-run) ────────────────────────────────────────────────────
+
+program
+  .command('cleanup')
+  .description('Preview which practice sets would be deleted by a filter (dry run — does not delete)')
+  .option('--filter <filter>', 'Filter: no-audio, has-audio, never-played')
+  .option('--not-played-since <duration>', 'Sets not played in N days/weeks (e.g. 7d, 2w)')
+  .action(async (opts: { filter?: string; notPlayedSince?: string }) => {
+    if (!opts.filter && !opts.notPlayedSince) {
+      console.error('Error: provide at least one filter (--filter, --not-played-since).');
+      console.error('  Examples:');
+      console.error('    nl cleanup --filter no-audio');
+      console.error('    nl cleanup --not-played-since 30d');
+      console.error('    nl cleanup --filter never-played --not-played-since 7d');
+      process.exit(1);
+    }
+
+    const validFilters = ['no-audio', 'has-audio', 'never-played'];
+    if (opts.filter && !validFilters.includes(opts.filter)) {
+      console.error(`Error: --filter must be one of: ${validFilters.join(', ')}`);
+      process.exit(1);
+    }
+
+    const client = getUserClient();
+
+    try {
+      const items = await getFilteredLibraryItems(client, opts.filter, opts.notPlayedSince);
+
+      if (items.length === 0) {
+        console.log('No matching practice sets found.');
+        return;
+      }
+
+      console.log(`Found ${items.length} matching practice set(s):\n`);
+      printFilteredItems(items);
+
+      // Build the equivalent delete command
+      const parts = ['nl delete'];
+      if (opts.filter) parts.push(`--filter ${opts.filter}`);
+      if (opts.notPlayedSince) parts.push(`--not-played-since ${opts.notPlayedSince}`);
+      console.log(`\nTo delete these, run:\n  ${parts.join(' ')}`);
     } catch (err: unknown) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -1584,6 +1269,33 @@ settingsCmd
     }
   });
 
+// ─── account ───────────────────────────────────────────────────────────────
+
+const accountCmd = program.command('account').description('Account management');
+
+accountCmd
+  .command('delete')
+  .description('Permanently delete your account')
+  .action(async () => {
+    console.log('WARNING: This will permanently delete your account and all data.');
+    console.log('This action cannot be undone.\n');
+    const answer = await prompt('Type DELETE to confirm: ');
+    if (answer !== 'DELETE') {
+      console.log('Cancelled.');
+      return;
+    }
+
+    const client = getUserClient();
+    try {
+      await client.deleteAccount();
+      clearAuth();
+      console.log('Account deleted. All data has been removed.');
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
 // ─── library search ────────────────────────────────────────────────────────
 
 program
@@ -1620,5 +1332,6 @@ program
       process.exit(1);
     }
   });
+
 
 program.parse(process.argv);

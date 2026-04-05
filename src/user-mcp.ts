@@ -129,6 +129,7 @@ async function fetchSetFileData(client: UserApiClient, intentId: string): Promis
         affirmationRepeatCount: latestConfig.affirmationRepeatCount,
         includePreamble: latestConfig.includePreamble,
         playAll: latestConfig.playAll,
+        repetitionModel: latestConfig.repetitionModel ?? 'weighted_shuffle',
         createdAt: latestConfig.createdAt,
         updatedAt: latestConfig.updatedAt,
       }

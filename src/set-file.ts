@@ -37,6 +37,7 @@ const setFileSchema = z.object({
   repeats: z.number().int().min(1).max(5).optional(),
   preamble: z.boolean().optional(),
   playAll: z.boolean().optional(),
+  repetitionModel: z.enum(['sequential', 'weighted_shuffle', 'favorites_first']).optional(),
   category: z.string().min(1).optional(),
   description: z.string().min(1).optional(),
   order: z.number().int().positive().optional(),
@@ -83,6 +84,7 @@ export function serializeSetFile(data: SetFileData): string {
     doc['repeats'] = renderConfig.affirmationRepeatCount;
     doc['preamble'] = renderConfig.includePreamble;
     doc['playAll'] = renderConfig.playAll;
+    doc['repetitionModel'] = renderConfig.repetitionModel;
   }
 
   // Catalog fields

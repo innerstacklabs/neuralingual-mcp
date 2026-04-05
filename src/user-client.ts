@@ -1,4 +1,4 @@
-import type { ApiEnv, RenderConfigInput, RenderConfig, RenderStatus, SyncAffirmationsInput, SyncAffirmationsResult } from './types.js';
+import type { ApiEnv, IntentStats, LibraryQueryParams, RenderConfigInput, RenderConfig, RenderStatus, SyncAffirmationsInput, SyncAffirmationsResult } from './types.js';
 import { API_BASE_URLS } from './types.js';
 import { loadAuth, saveAuth, clearAuth } from './auth-store.js';
 
@@ -52,6 +52,7 @@ interface LibraryItem {
     renderConfig: unknown;
     latestRenderJob: { id: string; status: string } | null;
   }>;
+  stats?: IntentStats;
 }
 
 interface IntentDetail {
@@ -87,6 +88,7 @@ interface IntentDetail {
     backgroundAudioPath: string | null;
     backgroundVolume: number;
     affirmationRepeatCount: number;
+    repetitionModel: string;
     includePreamble: boolean;
     playAll: boolean;
     createdAt: string;
@@ -176,6 +178,34 @@ export class UserApiClient {
     return new UserApiClient(API_BASE_URLS[auth.env], auth.env, auth.accessToken, auth.refreshToken);
   }
 
+  /** Login with email + secret. Returns the user info. */
+  static async login(env: ApiEnv, email: string, secret: string): Promise<{ client: UserApiClient; user: UserDto }> {
+    const baseUrl = API_BASE_URLS[env];
+    const res = await fetch(`${baseUrl}/auth/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, secret, clientType: 'cli' }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => null) as Record<string, unknown> | null;
+      const msg = data && typeof data['error'] === 'string' ? data['error'] : `Login failed (HTTP ${res.status})`;
+      throw new Error(msg);
+    }
+
+    const result = await res.json() as LoginResult;
+    saveAuth({
+      env,
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      userId: result.user.id,
+      email: result.user.email,
+    });
+
+    const client = new UserApiClient(baseUrl, env, result.accessToken, result.refreshToken);
+    return { client, user: result.user };
+  }
+
   /** Login with Apple identity token (from browser-based Sign In with Apple). */
   static async loginWithApple(
     env: ApiEnv,
@@ -183,7 +213,7 @@ export class UserApiClient {
     displayName?: string,
   ): Promise<{ client: UserApiClient; user: UserDto }> {
     const baseUrl = API_BASE_URLS[env];
-    const body: Record<string, string> = { idToken };
+    const body: Record<string, string> = { idToken, clientType: 'cli' };
     if (displayName) body['displayName'] = displayName;
 
     const res = await fetch(`${baseUrl}/auth/apple/callback`, {
@@ -351,8 +381,15 @@ export class UserApiClient {
 
   // --- Library ---
 
-  async getLibrary(): Promise<{ items: LibraryItem[] }> {
-    return this.request('GET', '/library');
+  async getLibrary(params?: LibraryQueryParams): Promise<{ items: LibraryItem[] }> {
+    const qs = new URLSearchParams();
+    if (params?.sort) qs.set('sort', params.sort);
+    if (params?.filter) qs.set('filter', params.filter);
+    if (params?.playedSince) qs.set('playedSince', params.playedSince);
+    if (params?.notPlayedSince) qs.set('notPlayedSince', params.notPlayedSince);
+    if (params?.context) qs.set('context', params.context);
+    const query = qs.toString();
+    return this.request('GET', `/library${query ? `?${query}` : ''}`);
   }
 
   // --- Intents ---
@@ -363,7 +400,7 @@ export class UserApiClient {
     return this.request('POST', '/affirmations/generate', body);
   }
 
-  async getIntent(id: string): Promise<{ intent: IntentDetail | null }> {
+  async getIntent(id: string): Promise<{ intent: IntentDetail | null; stats?: IntentStats }> {
     return this.request('GET', `/intents/${encodeURIComponent(id)}`);
   }
 
@@ -419,10 +456,20 @@ export class UserApiClient {
     return this.requestVoid('DELETE', `/intents/${encodeURIComponent(intentId)}`);
   }
 
+  async bulkDeleteIntents(ids: string[]): Promise<{ deleted: number; notFound: string[] }> {
+    return this.request('POST', '/intents/bulk-delete', { ids });
+  }
+
   // --- Profile ---
 
   async updateProfile(data: { displayName?: string; tonePreference?: string }): Promise<{ user: UserDto }> {
     return this.request('PATCH', '/auth/me', data);
+  }
+
+  // --- Account ---
+
+  async deleteAccount(): Promise<void> {
+    return this.requestVoid('DELETE', '/auth/account');
   }
 
   // --- Context Settings ---
