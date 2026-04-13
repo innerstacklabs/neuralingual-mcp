@@ -53,6 +53,16 @@ echo ""
 
 npm run build
 npm run typecheck
+npm test
 
 echo ""
-echo "Build and typecheck passed. Ready to commit and publish."
+echo "Build, typecheck, and tests passed."
+echo ""
+
+read -rp "Publish to npm? [y/N] " answer
+if [[ "$answer" =~ ^[Yy]$ ]]; then
+  npm publish --access public
+  echo "Published!"
+else
+  echo "Skipped publish. Ready to commit."
+fi
