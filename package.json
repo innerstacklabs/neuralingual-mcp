@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -38,6 +39,7 @@
   "homepage": "https://github.com/innerstacklabs/neuralingual-mcp#readme",
   "devDependencies": {
     "@types/node": "^22.19.17",
-    "typescript": "~5.8.0"
+    "typescript": "~5.8.0",
+    "vitest": "^4.1.4"
   }
 }

@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 /**
- * Neuralingual User MCP Server
+ * Neuralingual User MCP Server (manifest-driven)
  *
- * MCP server for AI assistant integration. Authenticates via stored JWT
- * from `neuralingual login`. Provides ~18 tools for library management,
- * creation, rendering, sharing, and YAML set file round-tripping.
+ * Registers user-facing MCP tools by iterating tool-manifest.json.
+ * The manifest is the single source of truth for tool names, descriptions,
+ * and parameter schemas. Handler logic lives in CUSTOM_HANDLERS below.
+ *
+ * Handler types:
+ * - "client-method": generic pass-through to UserApiClient methods
+ * - "custom": tool-specific logic defined in CUSTOM_HANDLERS
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -12,10 +16,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { z } from 'zod';
 import { UserApiClient } from './user-client.js';
 import { loadAuth } from './auth-store.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
+import { jsonSchemaToInputSchema, type JsonSchema } from './json-schema-to-zod.js';
 import { API_BASE_URLS } from './types.js';
 import type {
   RenderConfigInput,
@@ -26,13 +30,12 @@ import type {
   RenderConfig,
 } from './types.js';
 import type { SetFileData } from './set-file.js';
+import manifest from './tool-manifest.json' with { type: 'json' };
 
 const SERVER_NAME = 'neuralingual';
 const SERVER_VERSION = '0.2.0';
 
 const AUDIO_CACHE_DIR = join(homedir(), '.config', 'neuralingual', 'audio');
-
-const toneSchema = z.enum(['grounded', 'open', 'mystical']).optional();
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -249,479 +252,346 @@ async function applySetFile(
   return `Applied ${changes.length} change(s):\n${changes.map((c) => `  - ${c}`).join('\n')}`;
 }
 
-// ── Server ─────────────────────────────────────────────────────────────────
+// ── Custom Handlers ───────────────────────────────────────────────────────
+// These tools have non-trivial client-side logic that can't be expressed
+// as a simple "call client method, return JSON" pass-through.
 
-function buildServer() {
+type CustomHandlerFn = (params: Record<string, unknown>) => Promise<{
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+}>;
+
+export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
+  library: async () =>
+    withClient(async (client) => {
+      const { items } = await client.getLibrary();
+      const summary = items.map((item) => ({
+        id: item.intent.id,
+        title: item.intent.title,
+        emoji: item.intent.emoji,
+        context: item.intent.sessionContext,
+        affirmationCount: item.latestAffirmationSet?.affirmationCount ?? 0,
+        renderStatus: item.latestRenderJob?.status ?? 'none',
+        updatedAt: item.intent.updatedAt,
+      }));
+      return textResult(JSON.stringify(summary, null, 2));
+    }),
+
+  info: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const { intent } = await client.getIntent(resolvedId);
+      if (!intent) {
+        return errorResult('Practice set not found. Use nl_library to see available sets.');
+      }
+      return textResult(JSON.stringify(intent, null, 2));
+    }),
+
+  search: async (params) =>
+    withClient(async (client) => {
+      const query = params['query'] as string;
+      const { items } = await client.getLibrary();
+      const q = query.toLowerCase();
+      const matches = items.filter(
+        (item) =>
+          item.intent.title.toLowerCase().includes(q) ||
+          (item.intent.emoji ?? '').toLowerCase().includes(q) ||
+          item.intent.sessionContext.toLowerCase().includes(q),
+      );
+      const summary = matches.map((item) => ({
+        id: item.intent.id,
+        title: item.intent.title,
+        emoji: item.intent.emoji,
+        context: item.intent.sessionContext,
+        affirmationCount: item.latestAffirmationSet?.affirmationCount ?? 0,
+        renderStatus: item.latestRenderJob?.status ?? 'none',
+      }));
+      return textResult(
+        matches.length === 0
+          ? `No practice sets found matching "${query}".`
+          : JSON.stringify(summary, null, 2),
+      );
+    }),
+
+  voices: async (params) => {
+    try {
+      // Voices endpoint is public — no auth needed, but use the correct env
+      const auth = loadAuth();
+      const baseUrl = API_BASE_URLS[auth?.env ?? 'production'];
+      const res = await fetch(`${baseUrl}/voices`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { voices: Array<Record<string, unknown>> };
+      let voices = data.voices;
+      const gender = params['gender'] as string | undefined;
+      const accent = params['accent'] as string | undefined;
+      const tier = params['tier'] as string | undefined;
+      if (gender) {
+        const g = gender.toLowerCase();
+        voices = voices.filter((v) => String(v['gender'] ?? '').toLowerCase() === g);
+      }
+      if (accent) {
+        const a = accent.toLowerCase();
+        voices = voices.filter((v) => String(v['accent'] ?? '').toLowerCase() === a);
+      }
+      if (tier) {
+        const t = tier.toLowerCase();
+        voices = voices.filter((v) => String(v['tier'] ?? '').toLowerCase() === t);
+      }
+      return textResult(JSON.stringify(voices, null, 2));
+    } catch (err: unknown) {
+      return errorResult(err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  create: async (params) =>
+    withClient(async (client) => {
+      const text = params['text'] as string;
+      const tone = params['tone'] as string | undefined;
+      const result = await client.createAndGenerate(text, tone);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  rename: async (params) => {
+    const title = params['title'] as string | undefined;
+    const emoji = params['emoji'] as string | null | undefined;
+    if (title === undefined && emoji === undefined) {
+      return errorResult('At least one of title or emoji must be provided.');
+    }
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const input: { title?: string; emoji?: string | null } = {};
+      if (title !== undefined) input.title = title;
+      if (emoji !== undefined) input.emoji = emoji;
+      const result = await client.updateIntent(resolvedId, input);
+      return textResult(JSON.stringify(result, null, 2));
+    });
+  },
+
+  syncAffirmations: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const affirmations = params['affirmations'] as Array<{
+        id?: string;
+        text: string;
+        enabled: boolean;
+      }>;
+      const result = await client.syncAffirmations(resolvedId, { affirmations });
+      return textResult(
+        `Sync complete: ${result.added} added, ${result.updated} updated, ${result.removed} removed.`,
+      );
+    }),
+
+  renderConfigure: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const input: RenderConfigInput = {
+        voiceId: params['voiceId'] as string,
+        sessionContext: params['sessionContext'] as SessionContext,
+        durationMinutes: params['durationMinutes'] as number,
+      };
+      if (params['paceWpm'] !== undefined) input.paceWpm = params['paceWpm'] as number;
+      if (params['backgroundAudioPath'] !== undefined) input.backgroundAudioPath = params['backgroundAudioPath'] as string | null;
+      if (params['backgroundVolume'] !== undefined) input.backgroundVolume = params['backgroundVolume'] as number;
+      if (params['affirmationRepeatCount'] !== undefined) input.affirmationRepeatCount = params['affirmationRepeatCount'] as number;
+      if (params['includePreamble'] !== undefined) input.includePreamble = params['includePreamble'] as boolean;
+      if (params['playAll'] !== undefined) input.playAll = params['playAll'] as boolean;
+      const result = await client.configureRender(resolvedId, input);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  play: async (params) =>
+    withClient(async (client) => {
+      const id = params['id'] as string;
+      // Find the library item, resolving short IDs with ambiguity check
+      const { items } = await client.getLibrary();
+      let item = items.find((i) => i.intent.id === id);
+      if (!item) {
+        const prefixMatches = items.filter((i) => i.intent.id.startsWith(id));
+        if (prefixMatches.length === 1) {
+          item = prefixMatches[0];
+        } else if (prefixMatches.length > 1) {
+          throw new Error(
+            `Ambiguous ID "${id}" matches ${prefixMatches.length} sets. Use a longer prefix or the full ID.`,
+          );
+        }
+      }
+      if (!item) {
+        return errorResult('Practice set not found. Use nl_library to see available sets.');
+      }
+      const renderJob = item.latestRenderJob;
+      if (!renderJob?.id) {
+        return errorResult('No rendered audio available. Use nl_render_start first.');
+      }
+      if (renderJob.status !== 'completed') {
+        return errorResult(`Render is ${renderJob.status}, not ready to play. Wait for completion.`);
+      }
+
+      const cacheFile = join(AUDIO_CACHE_DIR, `${renderJob.id}.mp3`);
+      if (existsSync(cacheFile)) {
+        return textResult(JSON.stringify({ path: cacheFile, cached: true }, null, 2));
+      }
+
+      const audio = await client.getAudio(renderJob.id);
+      mkdirSync(AUDIO_CACHE_DIR, { recursive: true });
+      writeFileSync(cacheFile, audio);
+
+      return textResult(JSON.stringify({ path: cacheFile, cached: false }, null, 2));
+    }),
+
+  credits: async () =>
+    withClient(async (client) => {
+      const { user } = await client.getMe();
+      return textResult(
+        JSON.stringify(
+          {
+            creditBalance: user.creditBalance,
+            subscriptionCredits: user.subscriptionCredits,
+            purchasedCredits: user.purchasedCredits,
+            creditsResetAt: user.creditsResetAt,
+            subscriptionTier: user.subscriptionTier,
+            subscriptionStatus: user.subscriptionStatus,
+          },
+          null,
+          2,
+        ),
+      );
+    }),
+
+  setExport: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const data = await fetchSetFileData(client, resolvedId);
+      const yaml = serializeSetFile(data);
+      return textResult(yaml);
+    }),
+
+  setImport: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const originalData = await fetchSetFileData(client, resolvedId);
+      const result = await applySetFile(client, resolvedId, params['yaml'] as string, originalData);
+      return textResult(result);
+    }),
+};
+
+// ── Manifest types ────────────────────────────────────────────────────────
+
+interface EndpointDef {
+  method: string;
+  path: string;
+  auth: string;
+  note?: string;
+}
+
+interface ToolManifestEntry {
+  name: string;
+  description: string;
+  parameters: {
+    type: string;
+    properties?: Record<string, unknown>;
+    required?: string[];
+    additionalProperties?: boolean;
+  };
+  endpoint: EndpointDef;
+  handler:
+    | {
+        type: 'client-method';
+        clientMethod: string;
+        resolveId: boolean;
+        responseFormat: 'json' | 'void';
+        successMessage?: string;
+      }
+    | {
+        type: 'custom';
+        customHandler: string;
+      };
+}
+
+interface ToolManifest {
+  tools: ToolManifestEntry[];
+}
+
+// ── Server Builder ────────────────────────────────────────────────────────
+
+export function buildUserServer(): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+  const tools = (manifest as unknown as ToolManifest).tools;
 
-  // ── Library & Discovery ────────────────────────────────────────────────
+  for (const tool of tools) {
+    const inputSchema = jsonSchemaToInputSchema(tool.parameters as JsonSchema);
 
-  server.registerTool(
-    'nl_library',
-    {
-      description:
-        "List all practice sets in the user's library. Returns title, emoji, context, affirmation count, and render status for each set.",
-      inputSchema: {},
-    },
-    async () =>
-      withClient(async (client) => {
-        const { items } = await client.getLibrary();
-        const summary = items.map((item) => ({
-          id: item.intent.id,
-          title: item.intent.title,
-          emoji: item.intent.emoji,
-          context: item.intent.sessionContext,
-          affirmationCount: item.latestAffirmationSet?.affirmationCount ?? 0,
-          renderStatus: item.latestRenderJob?.status ?? 'none',
-          updatedAt: item.intent.updatedAt,
-        }));
-        return textResult(JSON.stringify(summary, null, 2));
-      }),
-  );
-
-  server.registerTool(
-    'nl_search',
-    {
-      description:
-        'Search practice sets in the library by keyword. Matches against title, emoji, and session context.',
-      inputSchema: {
-        query: z.string().min(1).describe('Search keyword to match against title, emoji, or context'),
-      },
-    },
-    async ({ query }) =>
-      withClient(async (client) => {
-        const { items } = await client.getLibrary();
-        const q = query.toLowerCase();
-        const matches = items.filter(
-          (item) =>
-            item.intent.title.toLowerCase().includes(q) ||
-            (item.intent.emoji ?? '').toLowerCase().includes(q) ||
-            item.intent.sessionContext.toLowerCase().includes(q),
+    if (tool.handler.type === 'custom') {
+      const handlerFn = CUSTOM_HANDLERS[tool.handler.customHandler];
+      if (!handlerFn) {
+        throw new Error(
+          `Missing custom handler "${tool.handler.customHandler}" for tool "${tool.name}"`,
         );
-        const summary = matches.map((item) => ({
-          id: item.intent.id,
-          title: item.intent.title,
-          emoji: item.intent.emoji,
-          context: item.intent.sessionContext,
-          affirmationCount: item.latestAffirmationSet?.affirmationCount ?? 0,
-          renderStatus: item.latestRenderJob?.status ?? 'none',
-        }));
-        return textResult(
-          matches.length === 0
-            ? `No practice sets found matching "${query}".`
-            : JSON.stringify(summary, null, 2),
-        );
-      }),
-  );
-
-  server.registerTool(
-    'nl_info',
-    {
-      description:
-        'Get detailed information about a practice set, including all affirmations, render config, and share status. Accepts full or short ID.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const { intent } = await client.getIntent(resolvedId);
-        if (!intent) {
-          return errorResult('Practice set not found. Use nl_library to see available sets.');
-        }
-        return textResult(JSON.stringify(intent, null, 2));
-      }),
-  );
-
-  server.registerTool(
-    'nl_voices',
-    {
-      description:
-        'List available voices for rendering. Returns voice ID, name, gender, accent, and tier. Voices are used with nl_render_configure.',
-      inputSchema: {
-        gender: z.string().optional().describe('Filter by gender (e.g. Male, Female)'),
-        accent: z.string().optional().describe('Filter by accent (e.g. US, UK, AU)'),
-        tier: z.string().optional().describe('Filter by tier (e.g. free, premium)'),
-      },
-    },
-    async ({ gender, accent, tier }) => {
-      try {
-        // Voices endpoint is public — no auth needed, but use the correct env
-        const auth = loadAuth();
-        const baseUrl = API_BASE_URLS[auth?.env ?? 'production'];
-        const res = await fetch(`${baseUrl}/voices`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { voices: Array<Record<string, unknown>> };
-        let voices = data.voices;
-        if (gender) {
-          const g = gender.toLowerCase();
-          voices = voices.filter((v) => String(v['gender'] ?? '').toLowerCase() === g);
-        }
-        if (accent) {
-          const a = accent.toLowerCase();
-          voices = voices.filter((v) => String(v['accent'] ?? '').toLowerCase() === a);
-        }
-        if (tier) {
-          const t = tier.toLowerCase();
-          voices = voices.filter((v) => String(v['tier'] ?? '').toLowerCase() === t);
-        }
-        return textResult(JSON.stringify(voices, null, 2));
-      } catch (err: unknown) {
-        return errorResult(err instanceof Error ? err.message : String(err));
       }
-    },
-  );
 
-  // ── Create & Edit ──────────────────────────────────────────────────────
+      server.registerTool(
+        tool.name,
+        { description: tool.description, inputSchema },
+        async (params: Record<string, unknown>) => handlerFn(params),
+      );
+    } else {
+      // client-method: generic pass-through
+      const { clientMethod, resolveId, responseFormat, successMessage } = tool.handler;
 
-  server.registerTool(
-    'nl_create',
-    {
-      description:
-        'Create a new practice set from intent text. AI generates affirmations based on your intent. Returns the new set with generated affirmations. Costs 1 credit.',
-      inputSchema: {
-        text: z
-          .string()
-          .min(1)
-          .max(500)
-          .describe('Intent text describing what you want to practice (e.g. "I am confident and capable")'),
-        tone: toneSchema.describe('Tone preference: grounded (default), open, or mystical'),
-      },
-    },
-    async ({ text, tone }) =>
-      withClient(async (client) => {
-        const result = await client.createAndGenerate(text, tone);
-        return textResult(JSON.stringify(result, null, 2));
-      }),
-  );
+      server.registerTool(
+        tool.name,
+        { description: tool.description, inputSchema },
+        async (params: Record<string, unknown>) =>
+          withClient(async (client) => {
+            let id = params['id'] as string | undefined;
 
-  server.registerTool(
-    'nl_rename',
-    {
-      description:
-        'Update the title and/or emoji of a practice set. At least one of title or emoji must be provided.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-        title: z.string().min(1).max(200).optional().describe('New title'),
-        emoji: z.string().nullable().optional().describe('New emoji (or null to clear)'),
-      },
-    },
-    async ({ id, title, emoji }) => {
-      if (title === undefined && emoji === undefined) {
-        return errorResult('At least one of title or emoji must be provided.');
-      }
-      return withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const input: { title?: string; emoji?: string | null } = {};
-        if (title !== undefined) input.title = title;
-        if (emoji !== undefined) input.emoji = emoji;
-        const result = await client.updateIntent(resolvedId, input);
-        return textResult(JSON.stringify(result, null, 2));
-      });
-    },
-  );
+            if (resolveId && id) {
+              id = await resolveIntentId(client, id);
+            }
 
-  server.registerTool(
-    'nl_sync_affirmations',
-    {
-      description:
-        'Declarative edit of affirmations in a practice set. Provide the complete desired list — affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-        affirmations: z
-          .array(
-            z.object({
-              id: z.string().optional().describe('Existing affirmation ID (omit for new)'),
-              text: z.string().min(1).describe('Affirmation text'),
-              enabled: z.boolean().describe('Whether this affirmation is active'),
-            }),
-          )
-          .min(1)
-          .describe('Complete list of desired affirmations'),
-      },
-    },
-    async ({ id, affirmations }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const result = await client.syncAffirmations(resolvedId, { affirmations });
-        return textResult(
-          `Sync complete: ${result.added} added, ${result.updated} updated, ${result.removed} removed.`,
-        );
-      }),
-  );
+            // Call the client method with the resolved ID
+            const method = client[clientMethod as keyof UserApiClient] as (
+              ...args: unknown[]
+            ) => Promise<unknown>;
 
-  server.registerTool(
-    'nl_delete',
-    {
-      description:
-        'Delete a practice set permanently. This cannot be undone.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        await client.deleteIntent(resolvedId);
-        return textResult(`Deleted practice set ${resolvedId}.`);
-      }),
-  );
+            let result: unknown;
+            if (id) {
+              result = await method.call(client, id);
+            } else {
+              result = await method.call(client);
+            }
 
-  // ── Render & Playback ──────────────────────────────────────────────────
+            if (responseFormat === 'void') {
+              const msg = successMessage
+                ? successMessage.replace('{id}', id ?? '')
+                : 'Done.';
+              return textResult(msg);
+            }
 
-  server.registerTool(
-    'nl_render_configure',
-    {
-      description:
-        'Configure render settings for a practice set. Must be done before starting a render. Use nl_voices to find available voice IDs.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-        voiceId: z.string().min(1).describe('Voice ID to use (from nl_voices)'),
-        sessionContext: z
-          .enum(['general', 'sleep', 'nap', 'meditation', 'workout', 'focus', 'walk', 'chores'])
-          .describe('Session context for pacing and tone'),
-        durationMinutes: z.number().int().min(1).max(120).describe('Target duration in minutes'),
-        paceWpm: z.number().int().min(90).max(220).optional().describe('Pace in words per minute'),
-        backgroundAudioPath: z
-          .string()
-          .nullable()
-          .optional()
-          .describe('Background sound storageKey (from nl_voices background list), or null to disable'),
-        backgroundVolume: z.number().min(0).max(1).optional().describe('Background volume 0-1'),
-        affirmationRepeatCount: z.number().int().min(1).max(5).optional().describe('Times each affirmation repeats'),
-        includePreamble: z.boolean().optional().describe('Include intro/outro preamble'),
-        playAll: z.boolean().optional().describe('Play all affirmations instead of fitting within duration'),
-      },
-    },
-    async ({ id, voiceId, sessionContext, durationMinutes, paceWpm, backgroundAudioPath, backgroundVolume, affirmationRepeatCount, includePreamble, playAll }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const input: RenderConfigInput = { voiceId, sessionContext, durationMinutes };
-        if (paceWpm !== undefined) input.paceWpm = paceWpm;
-        if (backgroundAudioPath !== undefined) input.backgroundAudioPath = backgroundAudioPath;
-        if (backgroundVolume !== undefined) input.backgroundVolume = backgroundVolume;
-        if (affirmationRepeatCount !== undefined) input.affirmationRepeatCount = affirmationRepeatCount;
-        if (includePreamble !== undefined) input.includePreamble = includePreamble;
-        if (playAll !== undefined) input.playAll = playAll;
-        const result = await client.configureRender(resolvedId, input);
-        return textResult(JSON.stringify(result, null, 2));
-      }),
-  );
-
-  server.registerTool(
-    'nl_render_start',
-    {
-      description:
-        'Start rendering audio for a practice set. The set must have a render config (use nl_render_configure first). Returns a job ID for tracking progress.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const result = await client.startRender(resolvedId);
-        return textResult(JSON.stringify(result, null, 2));
-      }),
-  );
-
-  server.registerTool(
-    'nl_render_status',
-    {
-      description:
-        'Check the render progress of a practice set. Returns status (none, queued, processing, completed, failed) and progress percentage.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const result = await client.getRenderStatus(resolvedId);
-        return textResult(JSON.stringify(result, null, 2));
-      }),
-  );
-
-  server.registerTool(
-    'nl_rerender',
-    {
-      description:
-        'Re-render a practice set with its current config. Convenience wrapper that starts a new render job.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const result = await client.startRender(resolvedId);
-        return textResult(JSON.stringify(result, null, 2));
-      }),
-  );
-
-  server.registerTool(
-    'nl_play',
-    {
-      description:
-        'Download rendered audio for a practice set and return the local file path. The audio must be fully rendered first (status: completed). The file is cached locally for future use.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        // Find the library item, resolving short IDs with ambiguity check
-        const { items } = await client.getLibrary();
-        let item = items.find((i) => i.intent.id === id);
-        if (!item) {
-          const prefixMatches = items.filter((i) => i.intent.id.startsWith(id));
-          if (prefixMatches.length === 1) {
-            item = prefixMatches[0];
-          } else if (prefixMatches.length > 1) {
-            throw new Error(
-              `Ambiguous ID "${id}" matches ${prefixMatches.length} sets. Use a longer prefix or the full ID.`,
-            );
-          }
-        }
-        if (!item) {
-          return errorResult('Practice set not found. Use nl_library to see available sets.');
-        }
-        const renderJob = item.latestRenderJob;
-        if (!renderJob?.id) {
-          return errorResult('No rendered audio available. Use nl_render_start first.');
-        }
-        if (renderJob.status !== 'completed') {
-          return errorResult(`Render is ${renderJob.status}, not ready to play. Wait for completion.`);
-        }
-
-        const cacheFile = join(AUDIO_CACHE_DIR, `${renderJob.id}.mp3`);
-        if (existsSync(cacheFile)) {
-          return textResult(JSON.stringify({ path: cacheFile, cached: true }, null, 2));
-        }
-
-        const audio = await client.getAudio(renderJob.id);
-        mkdirSync(AUDIO_CACHE_DIR, { recursive: true });
-        writeFileSync(cacheFile, audio);
-
-        return textResult(JSON.stringify({ path: cacheFile, cached: false }, null, 2));
-      }),
-  );
-
-  // ── Sharing & Settings ─────────────────────────────────────────────────
-
-  server.registerTool(
-    'nl_share',
-    {
-      description:
-        'Generate a public share link for a practice set. Anyone with the link can view and copy it.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const result = await client.shareIntent(resolvedId);
-        return textResult(JSON.stringify(result, null, 2));
-      }),
-  );
-
-  server.registerTool(
-    'nl_unshare',
-    {
-      description:
-        'Revoke the share link for a practice set. The link will no longer work.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        await client.unshareIntent(resolvedId);
-        return textResult(`Share link revoked for ${resolvedId}.`);
-      }),
-  );
-
-  server.registerTool(
-    'nl_credits',
-    {
-      description:
-        'Check the current credit balance. Shows subscription credits, purchased credits, and total available.',
-      inputSchema: {},
-    },
-    async () =>
-      withClient(async (client) => {
-        const { user } = await client.getMe();
-        return textResult(
-          JSON.stringify(
-            {
-              creditBalance: user.creditBalance,
-              subscriptionCredits: user.subscriptionCredits,
-              purchasedCredits: user.purchasedCredits,
-              creditsResetAt: user.creditsResetAt,
-              subscriptionTier: user.subscriptionTier,
-              subscriptionStatus: user.subscriptionStatus,
-            },
-            null,
-            2,
-          ),
-        );
-      }),
-  );
-
-  // ── YAML Set Files ─────────────────────────────────────────────────────
-
-  server.registerTool(
-    'nl_set_export',
-    {
-      description:
-        'Export a practice set as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_set_import.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-      },
-    },
-    async ({ id }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const data = await fetchSetFileData(client, resolvedId);
-        const yaml = serializeSetFile(data);
-        return textResult(yaml);
-      }),
-  );
-
-  server.registerTool(
-    'nl_set_import',
-    {
-      description:
-        'Apply a YAML set file to an existing practice set. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_set_export to get the current YAML first, edit it, then import.',
-      inputSchema: {
-        id: z.string().min(1).describe('Practice set ID (full or short prefix)'),
-        yaml: z.string().min(1).describe('YAML content to apply (from nl_set_export, edited)'),
-      },
-    },
-    async ({ id, yaml }) =>
-      withClient(async (client) => {
-        const resolvedId = await resolveIntentId(client, id);
-        const originalData = await fetchSetFileData(client, resolvedId);
-        const result = await applySetFile(client, resolvedId, yaml, originalData);
-        return textResult(result);
-      }),
-  );
+            return textResult(JSON.stringify(result, null, 2));
+          }),
+      );
+    }
+  }
 
   return server;
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
-  const server = buildServer();
+  const server = buildUserServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
-main().catch((err) => {
-  console.error('Fatal:', err);
-  process.exit(1);
-});
+// Only run when executed directly (not when imported in tests)
+const isMainModule =
+  import.meta.url === `file://${process.argv[1]}` ||
+  process.argv[1]?.endsWith('/user-mcp.js');
+
+if (isMainModule) {
+  main().catch((err) => {
+    console.error('Fatal:', err);
+    process.exit(1);
+  });
+}
