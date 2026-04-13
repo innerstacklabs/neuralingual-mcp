@@ -356,6 +356,8 @@ describe('UserApiClient', () => {
 
       // After failed refresh, original 401 response is still not ok → throws
       await expect(client.getMe()).rejects.toThrow('HTTP 401');
+      // Note: tryRefresh does not clear auth on failure — it only returns false
+      expect(mockedClearAuth).not.toHaveBeenCalled();
     });
 
     it('throws error when refresh request itself throws', async () => {
@@ -367,6 +369,7 @@ describe('UserApiClient', () => {
 
       // tryRefresh catches and returns false, so the original 401 propagates
       await expect(client.getMe()).rejects.toThrow('HTTP 401');
+      expect(mockedClearAuth).not.toHaveBeenCalled();
     });
 
     it('uses new token for the retry request after refresh', async () => {
