@@ -1,0 +1,561 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "description": "Neuralingual user-facing MCP tool definitions. Single source of truth for tool names, descriptions, parameters, and handler routing.",
+  "tools": [
+    {
+      "name": "nl_library",
+      "description": "List all practice sets in the user's library. Returns title, emoji, context, affirmation count, and render status for each set.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/library",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "library"
+      }
+    },
+    {
+      "name": "nl_search",
+      "description": "Search practice sets in the library by keyword. Matches against title, emoji, and session context.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Search keyword to match against title, emoji, or context"
+          }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/library",
+        "auth": "jwt",
+        "note": "Client-side filtering on the library response"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "search"
+      }
+    },
+    {
+      "name": "nl_info",
+      "description": "Get detailed information about a practice set, including all affirmations, render config, and share status. Accepts full or short ID.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/intents/{id}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "info"
+      }
+    },
+    {
+      "name": "nl_voices",
+      "description": "List available voices for rendering. Returns voice ID, name, gender, accent, and tier. Voices are used with nl_render_configure.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "gender": {
+            "type": "string",
+            "description": "Filter by gender (e.g. Male, Female)"
+          },
+          "accent": {
+            "type": "string",
+            "description": "Filter by accent (e.g. US, UK, AU)"
+          },
+          "tier": {
+            "type": "string",
+            "description": "Filter by tier (e.g. free, premium)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/voices",
+        "auth": "none",
+        "note": "Public endpoint, no auth required. Client-side filtering."
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "voices"
+      }
+    },
+    {
+      "name": "nl_create",
+      "description": "Create a new practice set from intent text. AI generates affirmations based on your intent. Returns the new set with generated affirmations. Costs 1 credit.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Intent text describing what you want to practice (e.g. \"I am confident and capable\")"
+          },
+          "tone": {
+            "type": "string",
+            "enum": ["grounded", "open", "mystical"],
+            "description": "Tone preference: grounded (default), open, or mystical"
+          }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/affirmations/generate",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "create"
+      }
+    },
+    {
+      "name": "nl_rename",
+      "description": "Update the title and/or emoji of a practice set. At least one of title or emoji must be provided.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "New title"
+          },
+          "emoji": {
+            "type": ["string", "null"],
+            "description": "New emoji (or null to clear)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/intents/{id}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "rename"
+      }
+    },
+    {
+      "name": "nl_sync_affirmations",
+      "description": "Declarative edit of affirmations in a practice set. Provide the complete desired list — affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          },
+          "affirmations": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Existing affirmation ID (omit for new)"
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Affirmation text"
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Whether this affirmation is active"
+                }
+              },
+              "required": ["text", "enabled"],
+              "additionalProperties": false
+            },
+            "description": "Complete list of desired affirmations"
+          }
+        },
+        "required": ["id", "affirmations"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PUT",
+        "path": "/intents/{id}/affirmations/sync",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "syncAffirmations"
+      }
+    },
+    {
+      "name": "nl_delete",
+      "description": "Delete a practice set permanently. This cannot be undone.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "DELETE",
+        "path": "/intents/{id}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "deleteIntent",
+        "resolveId": true,
+        "responseFormat": "void",
+        "successMessage": "Deleted practice set {id}."
+      }
+    },
+    {
+      "name": "nl_render_configure",
+      "description": "Configure render settings for a practice set. Must be done before starting a render. Use nl_voices to find available voice IDs.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          },
+          "voiceId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Voice ID to use (from nl_voices)"
+          },
+          "sessionContext": {
+            "type": "string",
+            "enum": ["general", "sleep", "nap", "meditation", "workout", "focus", "walk", "chores"],
+            "description": "Session context for pacing and tone"
+          },
+          "durationMinutes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120,
+            "description": "Target duration in minutes"
+          },
+          "paceWpm": {
+            "type": "integer",
+            "minimum": 90,
+            "maximum": 220,
+            "description": "Pace in words per minute"
+          },
+          "backgroundAudioPath": {
+            "type": ["string", "null"],
+            "description": "Background sound storageKey (from nl_voices background list), or null to disable"
+          },
+          "backgroundVolume": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Background volume 0-1"
+          },
+          "affirmationRepeatCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Times each affirmation repeats"
+          },
+          "includePreamble": {
+            "type": "boolean",
+            "description": "Include intro/outro preamble"
+          },
+          "playAll": {
+            "type": "boolean",
+            "description": "Play all affirmations instead of fitting within duration"
+          }
+        },
+        "required": ["id", "voiceId", "sessionContext", "durationMinutes"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PUT",
+        "path": "/intents/{id}/render-config",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "renderConfigure"
+      }
+    },
+    {
+      "name": "nl_render_start",
+      "description": "Start rendering audio for a practice set. The set must have a render config (use nl_render_configure first). Returns a job ID for tracking progress.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/intents/{id}/render",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "startRender",
+        "resolveId": true,
+        "responseFormat": "json"
+      }
+    },
+    {
+      "name": "nl_render_status",
+      "description": "Check the render progress of a practice set. Returns status (none, queued, processing, completed, failed) and progress percentage.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/intents/{id}/render-status",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "getRenderStatus",
+        "resolveId": true,
+        "responseFormat": "json"
+      }
+    },
+    {
+      "name": "nl_rerender",
+      "description": "Re-render a practice set with its current config. Convenience wrapper that starts a new render job.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/intents/{id}/render",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "startRender",
+        "resolveId": true,
+        "responseFormat": "json"
+      }
+    },
+    {
+      "name": "nl_play",
+      "description": "Download rendered audio for a practice set and return the local file path. The audio must be fully rendered first (status: completed). The file is cached locally for future use.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/render-jobs/{jobId}/audio",
+        "auth": "jwt",
+        "note": "Requires library lookup to find the render job ID first"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "play"
+      }
+    },
+    {
+      "name": "nl_share",
+      "description": "Generate a public share link for a practice set. Anyone with the link can view and copy it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/intents/{id}/share",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "shareIntent",
+        "resolveId": true,
+        "responseFormat": "json"
+      }
+    },
+    {
+      "name": "nl_unshare",
+      "description": "Revoke the share link for a practice set. The link will no longer work.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "DELETE",
+        "path": "/intents/{id}/share",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "unshareIntent",
+        "resolveId": true,
+        "responseFormat": "void",
+        "successMessage": "Share link revoked for {id}."
+      }
+    },
+    {
+      "name": "nl_credits",
+      "description": "Check the current credit balance. Shows subscription credits, purchased credits, and total available.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/auth/me",
+        "auth": "jwt",
+        "note": "Extracts credit fields from the user profile response"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "credits"
+      }
+    },
+    {
+      "name": "nl_set_export",
+      "description": "Export a practice set as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_set_import.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/intents/{id}",
+        "auth": "jwt",
+        "note": "Fetches intent detail, then serializes to YAML client-side"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "setExport"
+      }
+    },
+    {
+      "name": "nl_set_import",
+      "description": "Apply a YAML set file to an existing practice set. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_set_export to get the current YAML first, edit it, then import.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          },
+          "yaml": {
+            "type": "string",
+            "minLength": 1,
+            "description": "YAML content to apply (from nl_set_export, edited)"
+          }
+        },
+        "required": ["id", "yaml"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/intents/{id}",
+        "auth": "jwt",
+        "note": "Composite operation: PATCH intent + PUT affirmations/sync + PUT render-config"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "setImport"
+      }
+    }
+  ]
+}
