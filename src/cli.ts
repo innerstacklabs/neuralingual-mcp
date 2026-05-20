@@ -810,14 +810,23 @@ program
   .option('--tone <tone>', 'Tone preference: grounded, open, or mystical')
   .option('--source-text <text>', 'Source text to generate from')
   .option('--source-url <url>', 'Source URL to generate from')
-  .action(async (text: string | undefined, opts: { tone?: string; sourceText?: string; sourceUrl?: string }) => {
+  .option('--source-pdf <path>', 'Path to a PDF document to generate from')
+  .option('--source-youtube <url>', 'YouTube video URL to generate from')
+  .action(async (text: string | undefined, opts: { tone?: string; sourceText?: string; sourceUrl?: string; sourcePdf?: string; sourceYoutube?: string }) => {
     if (opts.tone && !VALID_TONES.includes(opts.tone)) {
       console.error(`Error: --tone must be one of: ${VALID_TONES.join(', ')}`);
       process.exit(1);
     }
 
-    if (!text && !opts.sourceText && !opts.sourceUrl) {
-      console.error('Error: provide intent text or --source-text / --source-url');
+    if (!text && !opts.sourceText && !opts.sourceUrl && !opts.sourcePdf && !opts.sourceYoutube) {
+      console.error('Error: provide intent text or a source (--source-text, --source-url, --source-pdf, --source-youtube)');
+      process.exit(1);
+    }
+
+    // Source inputs are mutually exclusive
+    const sourceFlags = [opts.sourceText, opts.sourceUrl, opts.sourcePdf, opts.sourceYoutube].filter(Boolean);
+    if (sourceFlags.length > 1) {
+      console.error('Error: --source-text, --source-url, --source-pdf, and --source-youtube are mutually exclusive. Use one at a time.');
       process.exit(1);
     }
 
@@ -830,6 +839,22 @@ program
         source = { type: 'text', text: opts.sourceText };
       } else if (opts.sourceUrl) {
         source = { type: 'url', url: opts.sourceUrl };
+      } else if (opts.sourcePdf) {
+        // Read PDF and pass as base64 text (server-side extraction via uploadPdf)
+        const { readFileSync, existsSync: fsExistsSync } = await import('node:fs');
+        if (!fsExistsSync(opts.sourcePdf)) {
+          console.error(`Error: file not found: ${opts.sourcePdf}`);
+          process.exit(1);
+        }
+        const buffer = readFileSync(opts.sourcePdf);
+        if (buffer.length > 10 * 1024 * 1024) {
+          console.error('Error: PDF file is too large. Maximum size is 10 MB.');
+          process.exit(1);
+        }
+        const preview = await client.uploadPdf(buffer);
+        source = { type: 'pdf', text: preview.text };
+      } else if (opts.sourceYoutube) {
+        source = { type: 'youtube', url: opts.sourceYoutube };
       }
 
       const result = await client.createAndGenerate(text, opts.tone, source);
