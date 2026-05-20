@@ -106,7 +106,7 @@
     },
     {
       "name": "nl_create",
-      "description": "Create a new practice set from intent text. AI generates affirmations based on your intent. Returns the new set with generated affirmations. Costs 1 credit.",
+      "description": "Create a new practice set. Provide intent text, source material (from a book, article, PDF, etc.), or both. When source is provided, AI generates affirmations grounded in that material. Costs 1 credit.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -114,15 +114,44 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500,
-            "description": "Intent text describing what you want to practice (e.g. \"I am confident and capable\")"
+            "description": "Intent text describing what you want to practice (e.g. \"I am confident and capable\"). Optional when sourceText is provided."
           },
           "tone": {
             "type": "string",
             "enum": ["grounded", "open", "mystical"],
             "description": "Tone preference: grounded (default), open, or mystical"
+          },
+          "sourceText": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000,
+            "description": "Source material text (from a book, article, podcast transcript, etc.). When provided, affirmations are generated grounded in this material. Intent text becomes optional."
+          },
+          "sourceTitle": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Title of the source material (e.g. book title, article headline)"
+          },
+          "sourceAuthor": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Author of the source material"
+          },
+          "sourceUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of a web article. Server extracts the article text automatically. Mutually exclusive with sourceText and sourcePdf."
+          },
+          "sourcePdf": {
+            "type": "string",
+            "description": "Absolute file path to a PDF document. Server extracts text automatically. Max 10 MB, 20 pages. Mutually exclusive with sourceText, sourceUrl, and sourceYoutube."
+          },
+          "sourceYoutube": {
+            "type": "string",
+            "format": "uri",
+            "description": "YouTube video URL. Server extracts the transcript (captions) automatically. Mutually exclusive with sourceText, sourceUrl, and sourcePdf."
           }
         },
-        "required": ["text"],
         "additionalProperties": false
       },
       "endpoint": {
@@ -454,34 +483,6 @@
       }
     },
     {
-      "name": "nl_unshare",
-      "description": "Revoke the share link for a practice set. The link will no longer work.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
-          }
-        },
-        "required": ["id"],
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "DELETE",
-        "path": "/intents/{id}/share",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "client-method",
-        "clientMethod": "unshareIntent",
-        "resolveId": true,
-        "responseFormat": "void",
-        "successMessage": "Share link revoked for {id}."
-      }
-    },
-    {
       "name": "nl_credits",
       "description": "Check the current credit balance. Shows subscription credits, purchased credits, and total available.",
       "parameters": {
@@ -501,8 +502,8 @@
       }
     },
     {
-      "name": "nl_set_export",
-      "description": "Export a practice set as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_set_import.",
+      "name": "nl_guide",
+      "description": "Render the framework (methodology, principles, sources, groupings, practical application, takeaway) for a practice set as markdown. Returns a clean fallback message for legacy sets that do not carry a framework — never errors on missing framework.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -510,6 +511,36 @@
             "type": "string",
             "minLength": 1,
             "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/intents/{id}",
+        "auth": "jwt",
+        "note": "Fetches intent detail, then renders framework client-side"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "guide"
+      }
+    },
+    {
+      "name": "nl_set_export",
+      "description": "Export a practice set as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_set_import. With withFramework=true, prepends the framework as markdown for human-facing contexts (the combined output is NOT re-importable via nl_set_import — apply expects pure YAML).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          },
+          "withFramework": {
+            "type": "boolean",
+            "description": "When true, prepend the framework as markdown before the YAML body. Default false (pure YAML, re-importable). Legacy sets without a framework render a fallback notice instead of failing."
           }
         },
         "required": ["id"],

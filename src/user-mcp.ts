@@ -20,6 +20,12 @@ import { UserApiClient } from './user-client.js';
 import { loadAuth } from './auth-store.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
 import { jsonSchemaToInputSchema, type JsonSchema } from './json-schema-to-zod.js';
+import {
+  renderFrameworkMarkdown,
+  extractFrameworkSchemaVersion,
+  extractFrameworkTakeaway,
+  hasFramework,
+} from './framework-render.js';
 import { API_BASE_URLS } from './types.js';
 import type {
   RenderConfigInput,
@@ -33,7 +39,7 @@ import type { SetFileData } from './set-file.js';
 import manifest from './tool-manifest.json' with { type: 'json' };
 
 const SERVER_NAME = 'neuralingual';
-const SERVER_VERSION = '0.2.0';
+const SERVER_VERSION = '0.5.0';
 
 const AUDIO_CACHE_DIR = join(homedir(), '.config', 'neuralingual', 'audio');
 
@@ -68,7 +74,6 @@ async function withClient<T>(fn: (client: UserApiClient) => Promise<T>) {
 
 /**
  * Resolve a short/truncated intent ID to the full ID via library lookup.
- * Supports exact match and unique prefix match.
  */
 async function resolveIntentId(client: UserApiClient, shortId: string): Promise<string> {
   const { items } = await client.getLibrary();
@@ -87,9 +92,14 @@ async function resolveIntentId(client: UserApiClient, shortId: string): Promise<
 }
 
 /**
- * Fetch set file data for YAML export. Maps user intent detail to SetFileData.
+ * Fetch set file data for YAML export. Also returns the raw framework JSON
+ * from the latest affirmation set so callers that need both (e.g.
+ * `setExport` with `withFramework: true`) don't re-fetch the intent.
  */
-async function fetchSetFileData(client: UserApiClient, intentId: string): Promise<SetFileData> {
+async function fetchSetFileData(
+  client: UserApiClient,
+  intentId: string,
+): Promise<{ data: SetFileData; framework: unknown }> {
   const { intent } = await client.getIntent(intentId);
   if (!intent) {
     throw new Error('Practice set not found. Use nl_library to see available sets.');
@@ -133,6 +143,10 @@ async function fetchSetFileData(client: UserApiClient, intentId: string): Promis
         includePreamble: latestConfig.includePreamble,
         playAll: latestConfig.playAll,
         repetitionModel: latestConfig.repetitionModel ?? 'weighted_shuffle',
+        binauralPreset: latestConfig.binauralPreset ?? null,
+        binauralVolume: latestConfig.binauralVolume ?? null,
+        subliminalEnabled: latestConfig.subliminalEnabled ?? false,
+        subliminalVolume: latestConfig.subliminalVolume ?? null,
         createdAt: latestConfig.createdAt,
         updatedAt: latestConfig.updatedAt,
       }
@@ -149,7 +163,6 @@ async function fetchSetFileData(client: UserApiClient, intentId: string): Promis
     isCatalog: false,
     catalogSlug: null,
     catalogCategory: null,
-    catalogSubtitle: null,
     catalogDescription: null,
     catalogOrder: null,
     createdAt: intent.createdAt,
@@ -157,7 +170,8 @@ async function fetchSetFileData(client: UserApiClient, intentId: string): Promis
     archivedAt: null,
   };
 
-  return { intent: mappedIntent, affirmations, renderConfig };
+  const framework = latestSet?.framework ?? null;
+  return { data: { intent: mappedIntent, affirmations, renderConfig }, framework };
 }
 
 /**
@@ -172,7 +186,6 @@ async function applySetFile(
   const parsed = parseSetFile(content);
   const changes: string[] = [];
 
-  // 1. Intent metadata updates
   const intentUpdates: { title?: string; emoji?: string | null; intentText?: string; tonePreference?: string | null } =
     {};
   if (parsed.title !== undefined && parsed.title !== originalData.intent.title) {
@@ -193,7 +206,6 @@ async function applySetFile(
     changes.push(`intent: updated ${Object.keys(intentUpdates).join(', ')}`);
   }
 
-  // 2. Affirmation sync
   if (parsed.affirmations && parsed.affirmations.length > 0) {
     const syncResult = await client.syncAffirmations(intentId, {
       affirmations: parsed.affirmations.map((a) => ({
@@ -212,7 +224,6 @@ async function applySetFile(
     }
   }
 
-  // 3. Render config updates
   const hasRenderFields =
     parsed.voice !== undefined ||
     parsed.duration !== undefined ||
@@ -284,7 +295,43 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       if (!intent) {
         return errorResult('Practice set not found. Use nl_library to see available sets.');
       }
-      return textResult(JSON.stringify(intent, null, 2));
+      // Additive framework surfacing (#749). Spreads existing intent fields
+      // unchanged at the top level, adds three framework-metadata fields
+      // alongside so current consumers keep working.
+      const latestSet = intent.affirmationSets[0];
+      const framework = latestSet?.framework ?? null;
+      // Strip framework + raw LLM payloads defensively.
+      const sanitizedAffirmationSets = intent.affirmationSets.map((set) => {
+        const bag: Record<string, unknown> = { ...set };
+        delete bag['framework'];
+        delete bag['rawFrameworkLlm'];
+        delete bag['rawAffirmationsLlm'];
+        return bag;
+      });
+      // Strip sourceText from response — it can be very large (up to 16k
+      // chars) and nl_info should show metadata only.
+      const intentBag: Record<string, unknown> = { ...intent };
+      delete intentBag['sourceText'];
+      const response = {
+        ...intentBag,
+        affirmationSets: sanitizedAffirmationSets,
+        hasFramework: hasFramework(framework),
+        frameworkSchemaVersion: extractFrameworkSchemaVersion(framework),
+        frameworkTakeaway: extractFrameworkTakeaway(framework),
+      };
+      return textResult(JSON.stringify(response, null, 2));
+    }),
+
+  guide: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const { intent } = await client.getIntent(resolvedId);
+      if (!intent) {
+        return errorResult('Practice set not found. Use nl_library to see available sets.');
+      }
+      const latestSet = intent.affirmationSets[0];
+      const framework = latestSet?.framework ?? null;
+      return textResult(renderFrameworkMarkdown(framework));
     }),
 
   search: async (params) =>
@@ -315,7 +362,6 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
 
   voices: async (params) => {
     try {
-      // Voices endpoint is public — no auth needed, but use the correct env
       const auth = loadAuth();
       const baseUrl = API_BASE_URLS[auth?.env ?? 'production'];
       const res = await fetch(`${baseUrl}/voices`);
@@ -345,10 +391,106 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
 
   create: async (params) =>
     withClient(async (client) => {
-      const text = params['text'] as string;
+      const text = params['text'] as string | undefined;
       const tone = params['tone'] as string | undefined;
-      const result = await client.createAndGenerate(text, tone);
-      return textResult(JSON.stringify(result, null, 2));
+      const sourceText = params['sourceText'] as string | undefined;
+      const sourceUrl = params['sourceUrl'] as string | undefined;
+      const sourcePdf = params['sourcePdf'] as string | undefined;
+      const sourceYoutube = params['sourceYoutube'] as string | undefined;
+      const sourceTitle = params['sourceTitle'] as string | undefined;
+      const sourceAuthor = params['sourceAuthor'] as string | undefined;
+
+      if (!text && !sourceText && !sourceUrl && !sourcePdf && !sourceYoutube) {
+        return errorResult('Please provide intent text, source material (sourceText, sourceUrl, sourcePdf, or sourceYoutube), or both.');
+      }
+
+      const sourceFlags = [sourceText, sourceUrl, sourcePdf, sourceYoutube].filter(Boolean);
+      if (sourceFlags.length > 1) {
+        return errorResult('sourceText, sourceUrl, sourcePdf, and sourceYoutube are mutually exclusive. Use one at a time.');
+      }
+
+      // PDF source: file path or base64-encoded content
+      let pdfExtractedText: string | undefined;
+      if (sourcePdf) {
+        let buffer: Buffer;
+
+        const isBase64Pdf = sourcePdf.startsWith('JVBER');
+        if (!isBase64Pdf) {
+          const { readFileSync, existsSync: fsExistsSync } = await import('node:fs');
+          if (!fsExistsSync(sourcePdf)) {
+            return errorResult(`File not found: ${sourcePdf}`);
+          }
+          buffer = readFileSync(sourcePdf);
+        } else {
+          try {
+            buffer = Buffer.from(sourcePdf, 'base64');
+          } catch {
+            return errorResult('Invalid sourcePdf: expected a file path or base64-encoded PDF content.');
+          }
+          if (buffer.length === 0) {
+            return errorResult('Invalid sourcePdf: base64 content decoded to empty buffer.');
+          }
+        }
+
+        if (buffer.length > 10 * 1024 * 1024) {
+          return errorResult('PDF file is too large. Maximum size is 10 MB.');
+        }
+        const preview = await client.uploadPdf(buffer);
+        pdfExtractedText = preview.text;
+      }
+
+      const source: { type: string; text?: string; url?: string; title?: string; author?: string } | undefined =
+        sourceText
+          ? {
+              type: 'text' as const,
+              text: sourceText,
+              ...(sourceTitle ? { title: sourceTitle } : {}),
+              ...(sourceAuthor ? { author: sourceAuthor } : {}),
+            }
+          : sourceUrl
+            ? {
+                type: 'url' as const,
+                url: sourceUrl,
+                ...(sourceTitle ? { title: sourceTitle } : {}),
+                ...(sourceAuthor ? { author: sourceAuthor } : {}),
+              }
+            : sourceYoutube
+              ? {
+                  type: 'youtube' as const,
+                  url: sourceYoutube,
+                  ...(sourceTitle ? { title: sourceTitle } : {}),
+                  ...(sourceAuthor ? { author: sourceAuthor } : {}),
+                }
+              : pdfExtractedText
+                ? {
+                    type: 'pdf' as const,
+                    text: pdfExtractedText,
+                    ...(sourceTitle ? { title: sourceTitle } : {}),
+                    ...(sourceAuthor ? { author: sourceAuthor } : {}),
+                  }
+                : undefined;
+
+      // Fetch YouTube preview metadata and include in result
+      let youtubePreview: { title: string; channelName: string | null; charCount: number; truncated: boolean } | undefined;
+      if (source?.type === 'youtube' && source.url) {
+        try {
+          const preview = await client.extractYoutubePreview(source.url);
+          youtubePreview = {
+            title: preview.title,
+            channelName: preview.channelName,
+            charCount: preview.charCount,
+            truncated: preview.truncated,
+          };
+        } catch {
+          // Preview failure is non-fatal — generation will still extract
+        }
+      }
+
+      const result = await client.createAndGenerate(text, tone, source);
+      const output = youtubePreview
+        ? { ...result, youtubePreview }
+        : result;
+      return textResult(JSON.stringify(output, null, 2));
     }),
 
   rename: async (params) => {
@@ -402,7 +544,6 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
   play: async (params) =>
     withClient(async (client) => {
       const id = params['id'] as string;
-      // Find the library item, resolving short IDs with ambiguity check
       const { items } = await client.getLibrary();
       let item = items.find((i) => i.intent.id === id);
       if (!item) {
@@ -460,15 +601,23 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
   setExport: async (params) =>
     withClient(async (client) => {
       const resolvedId = await resolveIntentId(client, params['id'] as string);
-      const data = await fetchSetFileData(client, resolvedId);
+      const withFramework = params['withFramework'] === true;
+      const { data, framework } = await fetchSetFileData(client, resolvedId);
       const yaml = serializeSetFile(data);
-      return textResult(yaml);
+
+      if (!withFramework) {
+        return textResult(yaml);
+      }
+
+      // Prepend framework markdown before the YAML body.
+      const markdown = renderFrameworkMarkdown(framework);
+      return textResult(`${markdown}\n${yaml}`);
     }),
 
   setImport: async (params) =>
     withClient(async (client) => {
       const resolvedId = await resolveIntentId(client, params['id'] as string);
-      const originalData = await fetchSetFileData(client, resolvedId);
+      const { data: originalData } = await fetchSetFileData(client, resolvedId);
       const result = await applySetFile(client, resolvedId, params['yaml'] as string, originalData);
       return textResult(result);
     }),
@@ -515,7 +664,7 @@ interface ToolManifest {
 
 export function buildUserServer(): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-  const tools = (manifest as unknown as ToolManifest).tools;
+  const tools = (manifest as ToolManifest).tools;
 
   for (const tool of tools) {
     const inputSchema = jsonSchemaToInputSchema(tool.parameters as JsonSchema);

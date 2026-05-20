@@ -25,12 +25,10 @@ vi.mock('./user-client.js', () => {
     getCreditTransactions: vi.fn(),
     getAudio: vi.fn(),
     shareIntent: vi.fn(),
-    unshareIntent: vi.fn(),
     deleteIntent: vi.fn(),
     bulkDeleteIntents: vi.fn(),
     syncAffirmations: vi.fn(),
     updateProfile: vi.fn(),
-    deleteAccount: vi.fn(),
     getContextSettings: vi.fn(),
     updateContextSettings: vi.fn(),
     deleteContextSettings: vi.fn(),
@@ -279,8 +277,12 @@ const mockIntentDetail = {
   rawText: 'I want to feel energized in the morning',
   tonePreference: 'grounded',
   sessionContext: 'general',
-  shareToken: null,
-  sharedAt: null,
+  sourceType: null,
+  sourceText: null,
+  sourceTitle: null,
+  sourceAuthor: null,
+  sourceSummary: null,
+  sourceUrl: null,
   createdAt: '2026-01-15T08:00:00Z',
   updatedAt: '2026-01-20T10:00:00Z',
   affirmationSets: [
@@ -308,6 +310,10 @@ const mockIntentDetail = {
       backgroundVolume: 0.3,
       affirmationRepeatCount: 2,
       repetitionModel: 'weighted_shuffle',
+      binauralPreset: null,
+      binauralVolume: null,
+      subliminalEnabled: false,
+      subliminalVolume: null,
       includePreamble: true,
       playAll: false,
       createdAt: '2026-01-16T08:00:00Z',
@@ -692,22 +698,13 @@ describe('CLI Commands', () => {
       await expect(client.getRenderStatus('intent-aaa')).rejects.toThrow('HTTP 404');
     });
 
-    it('should display share status when shared', async () => {
-      const sharedIntent = { ...mockIntentDetail, shareToken: 'abc123', sharedAt: '2026-04-10T07:00:00Z' };
-      client.getIntent.mockResolvedValue({ intent: sharedIntent });
+    it('should display source info when present', async () => {
+      const sourceIntent = { ...mockIntentDetail, sourceType: 'url', sourceUrl: 'https://example.com' };
+      client.getIntent.mockResolvedValue({ intent: sourceIntent });
 
       const { intent } = await client.getIntent('intent-aaa-111-full-id');
-      expect(intent!.shareToken).toBe('abc123');
-
-      const shareUrl = `https://neuralingual.com/shared/${intent!.shareToken}`;
-      expect(shareUrl).toBe('https://neuralingual.com/shared/abc123');
-    });
-
-    it('should display unshared status', async () => {
-      client.getIntent.mockResolvedValue({ intent: mockIntentDetail });
-
-      const { intent } = await client.getIntent('intent-aaa-111-full-id');
-      expect(intent!.shareToken).toBeNull();
+      expect(intent!.sourceType).toBe('url');
+      expect(intent!.sourceUrl).toBe('https://example.com');
     });
   });
 
@@ -1000,7 +997,7 @@ describe('CLI Commands', () => {
     });
   });
 
-  // ── share / unshare ─────────────────────────────────────────────────────
+  // ── share ───────────────────────────────────────────────────────────────
 
   describe('share', () => {
     it('should generate a share link', async () => {
@@ -1019,21 +1016,7 @@ describe('CLI Commands', () => {
     });
   });
 
-  describe('unshare', () => {
-    it('should revoke a share link', async () => {
-      client.getLibrary.mockResolvedValue({ items: mockLibraryItems });
-      client.unshareIntent.mockResolvedValue(undefined);
 
-      await client.unshareIntent('intent-aaa-111-full-id');
-
-      expect(client.unshareIntent).toHaveBeenCalledWith('intent-aaa-111-full-id');
-    });
-
-    it('should handle API errors', async () => {
-      client.unshareIntent.mockRejectedValue(new Error('Not shared'));
-      await expect(client.unshareIntent('bad-id')).rejects.toThrow('Not shared');
-    });
-  });
 
   // ── play ────────────────────────────────────────────────────────────────
 
@@ -1237,25 +1220,6 @@ describe('CLI Commands', () => {
         expect(validTones.includes('grounded')).toBe(true);
         expect(validTones.includes('invalid')).toBe(false);
       });
-    });
-  });
-
-  // ── account delete ──────────────────────────────────────────────────────
-
-  describe('account delete', () => {
-    it('should call deleteAccount and clearAuth', async () => {
-      client.deleteAccount.mockResolvedValue(undefined);
-
-      await client.deleteAccount();
-      clearAuth();
-
-      expect(client.deleteAccount).toHaveBeenCalled();
-      expect(clearAuth).toHaveBeenCalled();
-    });
-
-    it('should handle API errors', async () => {
-      client.deleteAccount.mockRejectedValue(new Error('Server error'));
-      await expect(client.deleteAccount()).rejects.toThrow('Server error');
     });
   });
 
