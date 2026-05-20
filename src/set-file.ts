@@ -24,7 +24,6 @@ const setFileAffirmationSchema = z.object({
 const setFileSchema = z.object({
   title: z.string().min(1).optional(),
   slug: z.string().optional(),
-  subtitle: z.string().optional(),
   emoji: z.string().nullable().optional(),
   tone: z.enum(['grounded', 'open', 'mystical']).optional(),
   intentContext: z.enum(['general', 'sleep', 'nap', 'meditation', 'workout', 'focus', 'walk', 'chores']).optional(),
@@ -65,7 +64,6 @@ export function serializeSetFile(data: SetFileData): string {
 
   doc['title'] = intent.title;
   if (intent.catalogSlug) doc['slug'] = intent.catalogSlug;
-  if (intent.catalogSubtitle) doc['subtitle'] = intent.catalogSubtitle;
   // Always export emoji for catalog items (even null, for round-trip fidelity).
   // For non-catalog items, only export if set.
   if (intent.isCatalog || intent.emoji) {

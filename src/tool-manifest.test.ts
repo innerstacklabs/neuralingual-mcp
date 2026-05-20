@@ -19,10 +19,10 @@ const EXPECTED_TOOL_NAMES = [
   'nl_rerender',
   'nl_play',
   'nl_share',
-  'nl_unshare',
   'nl_credits',
   'nl_set_export',
   'nl_set_import',
+  'nl_guide',
 ];
 
 describe('tool-manifest.json', () => {

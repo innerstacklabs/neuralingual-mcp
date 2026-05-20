@@ -50,8 +50,11 @@ const { mockClient } = vi.hoisted(() => {
     getAudio: vi.fn(),
     getMe: vi.fn(),
     shareIntent: vi.fn(),
-    unshareIntent: vi.fn(),
     deleteIntent: vi.fn(),
+    extractUrlPreview: vi.fn(),
+    extractYoutubePreview: vi.fn(),
+    uploadPdf: vi.fn(),
+    createAndGenerateWithMeta: vi.fn(),
   };
   return { mockClient };
 });
@@ -104,8 +107,12 @@ function makeIntentDetail(overrides: Record<string, unknown> = {}) {
     rawText: 'I want to feel confident',
     tonePreference: 'grounded',
     sessionContext: 'general',
-    shareToken: null,
-    sharedAt: null,
+    sourceType: null,
+    sourceText: null,
+    sourceTitle: null,
+    sourceAuthor: null,
+    sourceSummary: null,
+    sourceUrl: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-02T00:00:00Z',
     affirmationSets: [
@@ -135,6 +142,10 @@ function makeIntentDetail(overrides: Record<string, unknown> = {}) {
         backgroundVolume: 0.3,
         affirmationRepeatCount: 2,
         repetitionModel: 'weighted_shuffle',
+        binauralPreset: null,
+        binauralVolume: null,
+        subliminalEnabled: false,
+        subliminalVolume: null,
         includePreamble: true,
         playAll: false,
         createdAt: '2026-01-01T00:00:00Z',
@@ -423,14 +434,14 @@ describe('nl_create', () => {
 
     const result = parseResult(await handler({ text: 'Be confident' }));
     expect(result.data.intent.id).toBe('new-1');
-    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be confident', undefined);
+    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be confident', undefined, undefined);
   });
 
   it('passes tone parameter when provided', async () => {
     mockClient.createAndGenerate.mockResolvedValue({ intent: {}, affirmationSet: {} });
 
     await handler({ text: 'Be mystical', tone: 'mystical' });
-    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be mystical', 'mystical');
+    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be mystical', 'mystical', undefined);
   });
 });
 
@@ -987,7 +998,7 @@ describe('not logged in', () => {
 // These tools are registered via buildUserServer() using the manifest's
 // client-method handler type. We test them by calling the handlers indirectly.
 
-describe('client-method tools (delete, render_start, render_status, rerender, share, unshare)', () => {
+describe('client-method tools (delete, render_start, render_status, rerender, share)', () => {
   // For client-method tools, we need to test the pass-through behavior.
   // Since CUSTOM_HANDLERS doesn't include them, we test the resolveIntentId
   // logic directly and verify that buildUserServer doesn't throw.
@@ -998,7 +1009,7 @@ describe('client-method tools (delete, render_start, render_status, rerender, sh
   });
 
   // The client-method tools (nl_delete, nl_render_start, nl_render_status,
-  // nl_rerender, nl_share, nl_unshare) use the same withClient + resolveIntentId
+  // nl_rerender, nl_share) use the same withClient + resolveIntentId
   // pattern that custom handlers use. The resolveIntentId function is already
   // tested thoroughly via the custom handler tests above (info, rename, play, etc.).
   // The client-method pass-through calls the matching UserApiClient method with

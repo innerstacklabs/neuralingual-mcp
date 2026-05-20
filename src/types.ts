@@ -28,7 +28,6 @@ export interface Intent {
   isCatalog: boolean;
   catalogSlug: string | null;
   catalogCategory: string | null;
-  catalogSubtitle: string | null;
   catalogDescription: string | null;
   catalogOrder: number | null;
   createdAt: string;
@@ -84,7 +83,6 @@ export interface UpdateIntentInput {
 export interface CatalogPublishInput {
   slug: string;
   category: string;
-  subtitle: string;
   order: number;
   description: string;
   emoji?: string | undefined;
@@ -160,6 +158,10 @@ export interface RenderConfigInput {
   includePreamble?: boolean | undefined;
   playAll?: boolean | undefined;
   repetitionModel?: 'sequential' | 'weighted_shuffle' | 'favorites_first' | undefined;
+  binauralPreset?: 'theta' | 'alpha' | 'beta' | null | undefined;
+  binauralVolume?: number | undefined;
+  subliminalEnabled?: boolean | undefined;
+  subliminalVolume?: number | undefined;
 }
 
 export interface RenderConfig {
@@ -175,6 +177,10 @@ export interface RenderConfig {
   backgroundVolume: number;
   affirmationRepeatCount: number;
   repetitionModel: string;
+  binauralPreset: string | null;
+  binauralVolume: number | null;
+  subliminalEnabled: boolean;
+  subliminalVolume: number | null;
   includePreamble: boolean;
   playAll: boolean;
   createdAt: string;
@@ -186,10 +192,24 @@ export interface BackgroundSound {
   name: string;
   description: string;
   category: string;
+  contentType: string;
+  mood: string;
   storageKey: string;
   durationSeconds: number;
   sortOrder: number;
+  enabled: boolean;
   contexts: SessionContext[];
+}
+
+export interface UpdateBackgroundInput {
+  name?: string | undefined;
+  description?: string | undefined;
+  category?: string | undefined;
+  contentType?: string | undefined;
+  mood?: string | undefined;
+  sortOrder?: number | undefined;
+  contexts?: SessionContext[] | undefined;
+  enabled?: boolean | undefined;
 }
 
 export interface RenderStatus {
@@ -227,4 +247,3 @@ export interface Voice {
   sortOrder: number;
   enabled: boolean;
 }
-

@@ -159,6 +159,10 @@ async function fetchSetFileDataUser(client: UserApiClient, intentId: string): Pr
     backgroundVolume: latestConfig.backgroundVolume,
     affirmationRepeatCount: latestConfig.affirmationRepeatCount,
     repetitionModel: latestConfig.repetitionModel,
+    binauralPreset: latestConfig.binauralPreset ?? null,
+    binauralVolume: latestConfig.binauralVolume ?? null,
+    subliminalEnabled: latestConfig.subliminalEnabled ?? false,
+    subliminalVolume: latestConfig.subliminalVolume ?? null,
     includePreamble: latestConfig.includePreamble,
     playAll: latestConfig.playAll,
     createdAt: latestConfig.createdAt,
@@ -178,7 +182,6 @@ async function fetchSetFileDataUser(client: UserApiClient, intentId: string): Pr
     isCatalog: false,
     catalogSlug: null,
     catalogCategory: null,
-    catalogSubtitle: null,
     catalogDescription: null,
     catalogOrder: null,
     createdAt: intent.createdAt,
@@ -284,7 +287,6 @@ async function applySetFileUser(
   const hasCatalogFields = parsed.slug !== undefined ||
     parsed.category !== undefined ||
     parsed.description !== undefined ||
-    parsed.subtitle !== undefined ||
     parsed.order !== undefined;
 
   if (hasCatalogFields) {
@@ -683,13 +685,6 @@ program
         }
       }
 
-      // Share status
-      if (intent.shareToken) {
-        console.log(`Shared: yes (https://neuralingual.com/shared/${intent.shareToken})`);
-      } else {
-        console.log('Shared: no');
-      }
-
       // Timestamps
       console.log(`Created: ${new Date(intent.createdAt).toLocaleString()}`);
       console.log(`Updated: ${new Date(intent.updatedAt).toLocaleString()}`);
@@ -810,12 +805,19 @@ program
 // ─── create ─────────────────────────────────────────────────────────────────
 
 program
-  .command('create <text>')
-  .description('Create a new practice set from intent text')
+  .command('create [text]')
+  .description('Create a new practice set from intent text or source material')
   .option('--tone <tone>', 'Tone preference: grounded, open, or mystical')
-  .action(async (text: string, opts: { tone?: string }) => {
+  .option('--source-text <text>', 'Source text to generate from')
+  .option('--source-url <url>', 'Source URL to generate from')
+  .action(async (text: string | undefined, opts: { tone?: string; sourceText?: string; sourceUrl?: string }) => {
     if (opts.tone && !VALID_TONES.includes(opts.tone)) {
       console.error(`Error: --tone must be one of: ${VALID_TONES.join(', ')}`);
+      process.exit(1);
+    }
+
+    if (!text && !opts.sourceText && !opts.sourceUrl) {
+      console.error('Error: provide intent text or --source-text / --source-url');
       process.exit(1);
     }
 
@@ -823,7 +825,14 @@ program
     console.error('Creating practice set (this may take 10-30 seconds)...');
 
     try {
-      const result = await client.createAndGenerate(text, opts.tone);
+      let source: { type: string; text?: string; url?: string } | undefined;
+      if (opts.sourceText) {
+        source = { type: 'text', text: opts.sourceText };
+      } else if (opts.sourceUrl) {
+        source = { type: 'url', url: opts.sourceUrl };
+      }
+
+      const result = await client.createAndGenerate(text, opts.tone, source);
       const { intent, affirmationSet } = result;
       console.log(`\nCreated: ${intent.emoji ?? ''} ${intent.title}`);
       console.log(`Intent ID: ${intent.id}`);
@@ -975,20 +984,6 @@ program
     }
   });
 
-program
-  .command('unshare <intent-id>')
-  .description('Revoke a share link for a practice set')
-  .action(async (intentId: string) => {
-    const client = getUserClient();
-    try {
-      const resolvedId = await resolveIntentId(client, intentId);
-      await client.unshareIntent(resolvedId);
-      console.log('Share link revoked.');
-    } catch (err: unknown) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  });
 
 // ─── delete ────────────────────────────────────────────────────────────────
 
@@ -1271,30 +1266,6 @@ settingsCmd
 
 // ─── account ───────────────────────────────────────────────────────────────
 
-const accountCmd = program.command('account').description('Account management');
-
-accountCmd
-  .command('delete')
-  .description('Permanently delete your account')
-  .action(async () => {
-    console.log('WARNING: This will permanently delete your account and all data.');
-    console.log('This action cannot be undone.\n');
-    const answer = await prompt('Type DELETE to confirm: ');
-    if (answer !== 'DELETE') {
-      console.log('Cancelled.');
-      return;
-    }
-
-    const client = getUserClient();
-    try {
-      await client.deleteAccount();
-      clearAuth();
-      console.log('Account deleted. All data has been removed.');
-    } catch (err: unknown) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  });
 
 // ─── library search ────────────────────────────────────────────────────────
 

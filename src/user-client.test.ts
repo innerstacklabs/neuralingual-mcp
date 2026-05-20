@@ -880,20 +880,6 @@ describe('UserApiClient', () => {
     });
   });
 
-  describe('unshareIntent', () => {
-    it('sends DELETE to /intents/:id/share', async () => {
-      const client = makeClient();
-      mockedFetch.mockResolvedValue(voidResponse());
-
-      await client.unshareIntent('i1');
-
-      expect(mockedFetch).toHaveBeenCalledWith(
-        `${BASE_URL}/intents/i1/share`,
-        expect.objectContaining({ method: 'DELETE' }),
-      );
-    });
-  });
-
   // =====================================================================
   // Delete
   // =====================================================================
@@ -954,23 +940,6 @@ describe('UserApiClient', () => {
           method: 'PATCH',
           body: JSON.stringify({ displayName: 'New Name', tonePreference: 'mystical' }),
         }),
-      );
-    });
-  });
-
-  // =====================================================================
-  // Account
-  // =====================================================================
-  describe('deleteAccount', () => {
-    it('sends DELETE to /auth/account', async () => {
-      const client = makeClient();
-      mockedFetch.mockResolvedValue(voidResponse());
-
-      await client.deleteAccount();
-
-      expect(mockedFetch).toHaveBeenCalledWith(
-        `${BASE_URL}/auth/account`,
-        expect.objectContaining({ method: 'DELETE' }),
       );
     });
   });
