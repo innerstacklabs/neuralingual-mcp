@@ -39,7 +39,7 @@ import type { SetFileData } from './set-file.js';
 import manifest from './tool-manifest.json' with { type: 'json' };
 
 const SERVER_NAME = 'neuralingual';
-const SERVER_VERSION = '0.2.0';
+const SERVER_VERSION = '0.5.0';
 
 const AUDIO_CACHE_DIR = join(homedir(), '.config', 'neuralingual', 'audio');
 

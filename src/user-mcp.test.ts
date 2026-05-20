@@ -755,6 +755,55 @@ describe('nl_credits', () => {
   });
 });
 
+// ── nl_guide ─────────────────────────────────────────────────────────────
+
+describe('nl_guide', () => {
+  const handler = CUSTOM_HANDLERS['guide']!;
+
+  it('returns framework markdown for a set with framework', async () => {
+    const detail = makeIntentDetail();
+    detail.affirmationSets[0].framework = {
+      schemaVersion: 1,
+      methodology: 'Test methodology',
+      principles: ['Principle 1', 'Principle 2'],
+      takeaway: 'A key takeaway',
+    };
+    mockClient.getLibrary.mockResolvedValue({ items: [makeLibraryItem()] });
+    mockClient.getIntent.mockResolvedValue({ intent: detail });
+
+    const result = parseResult(await handler({ id: 'intent-abc-123-full' }));
+    expect(result.isError).toBeFalsy();
+    expect(result.text).toContain('methodology');
+  });
+
+  it('returns fallback message for legacy set without framework', async () => {
+    const detail = makeIntentDetail();
+    mockClient.getLibrary.mockResolvedValue({ items: [makeLibraryItem()] });
+    mockClient.getIntent.mockResolvedValue({ intent: detail });
+
+    const result = parseResult(await handler({ id: 'intent-abc-123-full' }));
+    expect(result.isError).toBeFalsy();
+    expect(result.text).toContain('No framework available');
+  });
+
+  it('resolves short ID', async () => {
+    mockClient.getLibrary.mockResolvedValue({ items: [makeLibraryItem()] });
+    mockClient.getIntent.mockResolvedValue({ intent: makeIntentDetail() });
+
+    await handler({ id: 'intent-abc' });
+    expect(mockClient.getIntent).toHaveBeenCalledWith('intent-abc-123-full');
+  });
+
+  it('returns error when set not found', async () => {
+    mockClient.getLibrary.mockResolvedValue({ items: [makeLibraryItem()] });
+    mockClient.getIntent.mockResolvedValue({ intent: null });
+
+    const result = parseResult(await handler({ id: 'intent-abc-123-full' }));
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('not found');
+  });
+});
+
 // ── nl_set_export ─────────────────────────────────────────────────────────
 
 describe('nl_set_export', () => {
