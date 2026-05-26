@@ -1,4 +1,4 @@
-import type { ApiEnv, IntentStats, LibraryQueryParams, RenderConfigInput, RenderConfig, RenderStatus, SyncAffirmationsInput, SyncAffirmationsResult } from './types.js';
+import type { ApiEnv, IntentStats, LibraryQueryParams, RenderConfigInput, RenderConfig, RenderStatus, SyncAffirmationsInput, SyncAffirmationsResult, Voice } from './types.js';
 import { API_BASE_URLS } from './types.js';
 import { loadAuth, saveAuth, clearAuth } from './auth-store.js';
 
@@ -367,6 +367,15 @@ export class UserApiClient {
 
     const client = new UserApiClient(baseUrl, env, result.accessToken, result.refreshToken);
     return { client, user: result.user };
+  }
+
+  /** Fetch available voices. Public endpoint — no auth required. */
+  static async getVoices(env?: ApiEnv): Promise<{ voices: Voice[] }> {
+    const auth = loadAuth();
+    const baseUrl = API_BASE_URLS[env ?? auth?.env ?? 'production'];
+    const res = await fetch(`${baseUrl}/voices`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json() as Promise<{ voices: Voice[] }>;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

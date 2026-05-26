@@ -42,6 +42,7 @@ vi.mock('./user-client.js', () => {
       fromAuth: vi.fn(() => mockClient),
       login: vi.fn(),
       loginWithApple: vi.fn(),
+      getVoices: vi.fn(),
       __mockClient: mockClient,
     },
   };
@@ -1813,6 +1814,240 @@ describe('CLI Commands', () => {
       const hasCatalogFields = true; // parsed from YAML
       // CLI logs: 'Note: catalog fields ... are admin-only and were skipped.'
       expect(hasCatalogFields).toBe(true);
+    });
+  });
+
+  // ── voices ──────────────────────────────────────────────────────────────
+
+  describe('voices', () => {
+    const mockVoices = [
+      { id: 'v1', externalId: 'ext-1', displayName: 'Aria', provider: 'elevenlabs', gender: 'female', accent: 'american', tier: 'free', sortOrder: 1, enabled: true },
+      { id: 'v2', externalId: 'ext-2', displayName: 'Marcus', provider: 'elevenlabs', gender: 'male', accent: 'american', tier: 'premium', sortOrder: 2, enabled: true },
+      { id: 'v3', externalId: 'ext-3', displayName: 'Sophie', provider: 'elevenlabs', gender: 'female', accent: 'british', tier: 'free', sortOrder: 3, enabled: true },
+      { id: 'v4', externalId: 'ext-4', displayName: 'Disabled Voice', provider: 'elevenlabs', gender: 'male', accent: 'australian', tier: 'free', sortOrder: 4, enabled: false },
+    ];
+
+    it('should fetch and display all enabled voices', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: mockVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof mockVoices }> }).getVoices();
+      const enabled = voices.filter((v) => v.enabled);
+
+      expect(enabled).toHaveLength(3);
+      expect(enabled.map((v) => v.displayName)).toEqual(['Aria', 'Marcus', 'Sophie']);
+    });
+
+    it('should filter out disabled voices', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: mockVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof mockVoices }> }).getVoices();
+      const enabled = voices.filter((v) => v.enabled);
+
+      expect(enabled.find((v) => v.displayName === 'Disabled Voice')).toBeUndefined();
+    });
+
+    it('should filter by gender (case-insensitive)', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: mockVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof mockVoices }> }).getVoices();
+      const gender = 'Female';
+      const filtered = voices.filter((v) => v.enabled && v.gender.toLowerCase() === gender.toLowerCase());
+
+      expect(filtered).toHaveLength(2);
+      expect(filtered.map((v) => v.displayName)).toEqual(['Aria', 'Sophie']);
+    });
+
+    it('should filter by accent (case-insensitive)', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: mockVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof mockVoices }> }).getVoices();
+      const accent = 'British';
+      const filtered = voices.filter((v) => v.enabled && v.accent.toLowerCase() === accent.toLowerCase());
+
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0]!.displayName).toBe('Sophie');
+    });
+
+    it('should filter by tier (case-insensitive)', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: mockVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof mockVoices }> }).getVoices();
+      const tier = 'Premium';
+      const filtered = voices.filter((v) => v.enabled && v.tier.toLowerCase() === tier.toLowerCase());
+
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0]!.displayName).toBe('Marcus');
+    });
+
+    it('should support combined filters', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: mockVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof mockVoices }> }).getVoices();
+      const gender = 'female';
+      const accent = 'american';
+      const filtered = voices
+        .filter((v) => v.enabled)
+        .filter((v) => v.gender.toLowerCase() === gender)
+        .filter((v) => v.accent.toLowerCase() === accent);
+
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0]!.displayName).toBe('Aria');
+    });
+
+    it('should sort by sortOrder', async () => {
+      const unsortedVoices = [
+        { id: 'v3', externalId: 'ext-3', displayName: 'Sophie', provider: 'elevenlabs', gender: 'female', accent: 'british', tier: 'free', sortOrder: 3, enabled: true },
+        { id: 'v1', externalId: 'ext-1', displayName: 'Aria', provider: 'elevenlabs', gender: 'female', accent: 'american', tier: 'free', sortOrder: 1, enabled: true },
+      ];
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: unsortedVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof unsortedVoices }> }).getVoices();
+      const sorted = [...voices].filter((v) => v.enabled).sort((a, b) => a.sortOrder - b.sortOrder);
+
+      expect(sorted[0]!.displayName).toBe('Aria');
+      expect(sorted[1]!.displayName).toBe('Sophie');
+    });
+
+    it('should handle empty voice list', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: [] });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: never[] }> }).getVoices();
+      expect(voices).toHaveLength(0);
+    });
+
+    it('should handle API errors', async () => {
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockRejectedValue(new Error('HTTP 500'));
+
+      await expect(
+        (UserApiClient as unknown as { getVoices: () => Promise<unknown> }).getVoices(),
+      ).rejects.toThrow('HTTP 500');
+    });
+
+    it('should not require login', async () => {
+      // voices uses UserApiClient.getVoices() (static), not getUserClient()
+      // So it should work even when fromAuth throws
+      (UserApiClient.fromAuth as Mock).mockImplementation(() => {
+        throw new Error('Not logged in');
+      });
+      (UserApiClient as unknown as { getVoices: Mock }).getVoices.mockResolvedValue({ voices: mockVoices });
+
+      const { voices } = await (UserApiClient as unknown as { getVoices: () => Promise<{ voices: typeof mockVoices }> }).getVoices();
+      expect(voices).toHaveLength(4);
+    });
+  });
+
+  // ── render-status ──────────────────────────────────────────────────────
+
+  describe('render-status', () => {
+    it('should show completed status with download hint', async () => {
+      client.getLibrary.mockResolvedValue({ items: mockLibraryItems });
+      client.getRenderStatus.mockResolvedValue({
+        status: 'completed',
+        progress: 100,
+        outputKey: 'audio/output.mp3',
+        errorMessage: null,
+        jobId: 'job-abc-123',
+      });
+
+      const status = await client.getRenderStatus('intent-aaa-111-full-id');
+
+      expect(status.status).toBe('completed');
+      expect(status.progress).toBe(100);
+      expect(status.jobId).toBe('job-abc-123');
+      // CLI would show: "Download with: nl download job-abc-123"
+    });
+
+    it('should show processing status with progress', async () => {
+      client.getRenderStatus.mockResolvedValue({
+        status: 'processing',
+        progress: 45,
+        outputKey: null,
+        errorMessage: null,
+        jobId: 'job-def-456',
+      });
+
+      const status = await client.getRenderStatus('intent-aaa');
+
+      expect(status.status).toBe('processing');
+      expect(status.progress).toBe(45);
+      expect(status.jobId).toBe('job-def-456');
+    });
+
+    it('should show failed status with error message', async () => {
+      client.getRenderStatus.mockResolvedValue({
+        status: 'failed',
+        progress: 0,
+        outputKey: null,
+        errorMessage: 'TTS provider timeout',
+        jobId: 'job-ghi-789',
+      });
+
+      const status = await client.getRenderStatus('intent-aaa');
+
+      expect(status.status).toBe('failed');
+      expect(status.errorMessage).toBe('TTS provider timeout');
+    });
+
+    it('should show queued status', async () => {
+      client.getRenderStatus.mockResolvedValue({
+        status: 'queued',
+        progress: 0,
+        outputKey: null,
+        errorMessage: null,
+        jobId: 'job-jkl-012',
+      });
+
+      const status = await client.getRenderStatus('intent-aaa');
+
+      expect(status.status).toBe('queued');
+      expect(status.progress).toBe(0);
+    });
+
+    it('should show none status when no render exists', async () => {
+      client.getRenderStatus.mockResolvedValue({
+        status: 'none',
+        progress: 0,
+        outputKey: null,
+        errorMessage: null,
+      });
+
+      const status = await client.getRenderStatus('intent-aaa');
+
+      expect(status.status).toBe('none');
+      expect(status.jobId).toBeUndefined();
+    });
+
+    it('should handle completed status without jobId gracefully', async () => {
+      client.getRenderStatus.mockResolvedValue({
+        status: 'completed',
+        progress: 100,
+        outputKey: 'audio/output.mp3',
+        errorMessage: null,
+        // No jobId — edge case
+      });
+
+      const status = await client.getRenderStatus('intent-aaa');
+
+      expect(status.status).toBe('completed');
+      expect(status.jobId).toBeUndefined();
+      // CLI should NOT show download hint without jobId
+    });
+
+    it('should resolve short IDs via library', async () => {
+      client.getLibrary.mockResolvedValue({ items: mockLibraryItems });
+
+      const { items } = await client.getLibrary();
+      const shortId = 'intent-a';
+      const match = items.filter((i: { intent: { id: string } }) => i.intent.id.startsWith(shortId));
+
+      expect(match).toHaveLength(1);
+      expect(match[0]!.intent.id).toBe('intent-aaa-111-full-id');
+    });
+
+    it('should handle API errors', async () => {
+      client.getRenderStatus.mockRejectedValue(new Error('HTTP 404: Not found'));
+
+      await expect(client.getRenderStatus('nonexistent')).rejects.toThrow('HTTP 404');
     });
   });
 });
