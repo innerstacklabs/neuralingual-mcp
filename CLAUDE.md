@@ -45,6 +45,7 @@ This is the **public** package extracted from `innerstacklabs/neuralingual` (pri
 ## npm Publishing
 
 - Package: `@innerstacklabs/neuralingual-mcp`
-- Token: stored in 1Password ("npm - ISL Publish Token") and GitHub secret `NPM_TOKEN`
-- Publish: `npm publish --access public` (CI via GitHub Actions on tagged releases)
-- Token expires every 90 days — check 1Password for rotation date
+- Auth: OIDC trusted publishing via GitHub Actions (no stored npm token)
+- Workflow: `.github/workflows/publish.yml` triggers on `v*` tags
+- Release: `npm version patch && git push && git push --tags`
+- Prerequisite: trusted publisher must be linked on [npmjs.com package access page](https://www.npmjs.com/package/@innerstacklabs/neuralingual-mcp/access) (org: `innerstacklabs`, repo: `neuralingual-mcp`, workflow: `publish.yml`)
