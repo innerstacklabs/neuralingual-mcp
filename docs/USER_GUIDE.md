@@ -368,6 +368,65 @@ neuralingual settings set --name "Jane"
 
 ---
 
+## Source-Based Creation
+
+Create practice sets grounded in external source material — articles, books, YouTube videos, Twitter threads, or PDFs. The AI generates affirmations informed by the source content.
+
+### Extract and Preview a Source
+
+Before creating a set from source material, you can preview what the server extracts:
+
+```bash
+# Web article
+neuralingual source extract "https://example.com/article-about-resilience"
+
+# YouTube video transcript
+neuralingual source youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Twitter/X thread
+neuralingual source twitter "https://x.com/user/status/123456789"
+```
+
+### Create from Source (MCP)
+
+Using the MCP tools, you can create sets from source material directly:
+
+```
+> Create a neuralingual set from this article: https://example.com/stoic-philosophy
+
+Extracting article text... "The Daily Stoic: 3 Practices for Modern Life" by Ryan Holiday (4,200 chars)
+Creating practice set grounded in source material...
+
+Created: Stoic Foundations
+Intent ID: def45678-...
+Context: general
+Source: "The Daily Stoic: 3 Practices for Modern Life" by Ryan Holiday
+Affirmations (24): grounded in Stoic philosophy
+
+> Create a set from this YouTube video about mindfulness
+
+Extracting transcript from "10 Minutes of Mindfulness"...
+Creating practice set...
+```
+
+### Source Types
+
+| Source | Tool Parameter | Description |
+|--------|---------------|-------------|
+| Web article | `sourceUrl` | Server extracts article text automatically |
+| YouTube video | `sourceYoutube` | Server extracts video transcript (captions) |
+| Twitter/X post | `sourceUrl` (via nl_source_twitter) | Server extracts thread text |
+| PDF document | `sourcePdf` | Local file path, max 10 MB / 20 pages |
+| Raw text | `sourceText` | Paste text directly (max 16,000 chars) |
+
+You can combine source material with intent text for more targeted results:
+
+```bash
+neuralingual create "Focus on the self-compassion aspects" --source-url "https://example.com/self-care-article"
+```
+
+---
+
 ## Builder Examples
 
 ### Create a Morning Affirmation Set

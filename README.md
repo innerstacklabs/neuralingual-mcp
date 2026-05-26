@@ -94,27 +94,90 @@ Add to your `.mcp.json` (Claude Code) or MCP client config:
 
 **Prerequisite:** Run `neuralingual login` first to authenticate.
 
-### MCP Tools
+### MCP Tools (43 tools)
+
+**Library & Discovery**
 
 | Tool | Description |
 |---|---|
 | `nl_library` | List all practice sets with title, context, render status |
+| `nl_library_list` | List playlists with play count and last-played metadata |
+| `nl_library_view` | View a playlist with affirmations, feedback, and play stats |
 | `nl_info` | Full set details — affirmations, render config, share status |
 | `nl_search` | Search sets by keyword |
-| `nl_create` | Create a new set from intent text (costs 1 credit) |
-| `nl_delete` | Delete a practice set |
+| `nl_guide` | Render the framework (methodology, principles, sources) as markdown |
+
+**Creation & Editing**
+
+| Tool | Description |
+|---|---|
+| `nl_create` | Create a new set from intent text and/or source material (costs 1 credit) |
 | `nl_rename` | Update title and/or emoji |
-| `nl_play` | Download rendered audio to local cache |
-| `nl_credits` | Check credit balance |
+| `nl_delete` | Delete a practice set |
+| `nl_intent_update` | Update intent text, title, emoji, or tone |
+| `nl_intent_delete` | Delete a playlist (alias for nl_delete) |
+| `nl_generate_more` | Generate additional affirmations for an existing set (costs 1 credit) |
+
+**Affirmation Management**
+
+| Tool | Description |
+|---|---|
+| `nl_affirmation_add` | Add a custom affirmation to a playlist |
+| `nl_affirmation_delete` | Delete a single affirmation |
+| `nl_affirmations_feedback` | Like or dislike affirmations (batch) |
+| `nl_affirmations_toggle` | Enable or disable affirmations (batch) |
+| `nl_sync_affirmations` | Declarative sync — add, update, remove affirmations |
+| `nl_set_export` | Export set as editable YAML (optionally with framework) |
+| `nl_set_import` | Apply edited YAML back to a set |
+
+**Audio & Rendering**
+
+| Tool | Description |
+|---|---|
 | `nl_voices` | List available voices with accent, gender, tier |
 | `nl_render_configure` | Configure voice, background, pace, duration, context |
 | `nl_render_start` | Start audio rendering |
 | `nl_render_status` | Check render progress |
 | `nl_rerender` | Re-render with current config |
-| `nl_share` / `nl_unshare` | Generate or revoke public share links |
-| `nl_set_export` | Export set as editable YAML |
-| `nl_set_import` | Apply edited YAML back to a set |
-| `nl_sync_affirmations` | Declarative sync — add, update, remove affirmations |
+| `nl_play` | Download rendered audio to local cache |
+| `nl_playback_start` | Log the start of a practice session |
+| `nl_playback_complete` | Record session duration and completion |
+
+**Source Extraction**
+
+| Tool | Description |
+|---|---|
+| `nl_source_extract` | Extract text from a web article URL |
+| `nl_source_youtube` | Extract transcript from a YouTube video |
+| `nl_source_twitter` | Extract text from a Twitter/X post |
+| `nl_source_pdf` | Upload and extract text from a local PDF |
+
+**Catalog**
+
+| Tool | Description |
+|---|---|
+| `nl_catalog_browse` | Browse curated catalog with filtering and sorting |
+| `nl_catalog_view` | View a catalog item with full details |
+| `nl_catalog_copy` | Copy a catalog playlist to your library |
+
+**Settings & Preferences**
+
+| Tool | Description |
+|---|---|
+| `nl_context_settings_list` | List per-context default settings |
+| `nl_context_settings_update` | Update defaults for a session context |
+| `nl_context_settings_reset` | Reset a context to system defaults |
+| `nl_wizard_defaults` | Get resolved wizard defaults (voice, background, binaural, etc.) |
+
+**Account**
+
+| Tool | Description |
+|---|---|
+| `nl_user_profile` | Get user profile, subscription tier, and credits |
+| `nl_user_set_username` | Set or update username |
+| `nl_user_check_username` | Check username availability |
+| `nl_credits` | Check credit balance |
+| `nl_share` | Generate a public share link |
 
 ### Example (Claude Code)
 
