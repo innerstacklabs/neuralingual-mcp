@@ -531,6 +531,36 @@
       }
     },
     {
+      "name": "nl_unshare",
+      "description": "Revoke the share link for a practice set. The link will no longer work.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Practice set ID (full or short prefix)"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "DELETE",
+        "path": "/intents/{id}/share",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "unshareIntent",
+        "resolveId": true,
+        "responseFormat": "void",
+        "successMessage": "Share link revoked for {id}."
+      }
+    },
+    {
       "name": "nl_credits",
       "description": "Check the current credit balance. Shows subscription credits, purchased credits, and total available.",
       "parameters": {

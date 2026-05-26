@@ -744,6 +744,10 @@ export class UserApiClient {
     return this.request('POST', `/intents/${encodeURIComponent(intentId)}/share`);
   }
 
+  async unshareIntent(intentId: string): Promise<void> {
+    return this.requestVoid('DELETE', `/intents/${encodeURIComponent(intentId)}/share`);
+  }
+
   // --- Delete ---
 
   async deleteIntent(intentId: string): Promise<void> {

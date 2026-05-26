@@ -50,6 +50,7 @@ const { mockClient } = vi.hoisted(() => {
     getAudio: vi.fn(),
     getMe: vi.fn(),
     shareIntent: vi.fn(),
+    unshareIntent: vi.fn(),
     deleteIntent: vi.fn(),
     extractUrlPreview: vi.fn(),
     extractYoutubePreview: vi.fn(),

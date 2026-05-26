@@ -1,0 +1,14 @@
+# Smithery configuration for Neuralingual MCP server
+# https://smithery.ai/docs/config
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties: {}
+    additionalProperties: false
+  commandFunction: |-
+    (config) => ({
+      command: 'npx',
+      args: ['-y', '-p', '@innerstacklabs/neuralingual-mcp', 'neuralingual-mcp']
+    })
