@@ -254,7 +254,7 @@ describe('nl_search', () => {
     mockClient.getLibrary.mockResolvedValue({ items: [] });
 
     const result = parseResult(await handler({ query: 'nonexistent' }));
-    expect(result.text).toContain('No practice sets found matching "nonexistent"');
+    expect(result.text).toContain('No playlists found matching "nonexistent"');
   });
 
   it('search is case-insensitive', async () => {

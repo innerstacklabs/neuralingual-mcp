@@ -157,7 +157,7 @@ export interface RenderConfigInput {
   affirmationRepeatCount?: number | undefined;
   includePreamble?: boolean | undefined;
   playAll?: boolean | undefined;
-  repetitionModel?: 'sequential' | 'weighted_shuffle' | 'favorites_first' | undefined;
+  repetitionModel?: 'sequential' | 'shuffle' | 'weighted_shuffle' | 'favorites_first' | undefined;
   binauralPreset?: 'theta' | 'alpha' | 'beta' | null | undefined;
   binauralVolume?: number | undefined;
   subliminalEnabled?: boolean | undefined;
