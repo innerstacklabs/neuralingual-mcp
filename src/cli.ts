@@ -9,7 +9,7 @@ import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { UserApiClient } from './user-client.js';
 import { loadAuth, clearAuth } from './auth-store.js';
-import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderConfigInput, RenderStatus, SessionContext, TonePreference } from './types.js';
+import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderConfigInput, RenderStatus, SessionContext, TonePreference, Voice } from './types.js';
 import { API_BASE_URLS } from './types.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
 import { z } from 'zod';
@@ -1329,5 +1329,96 @@ program
     }
   });
 
+
+// ─── voices ───────────────────────────────────────────────────────────────
+
+program
+  .command('voices')
+  .description('List available voices')
+  .option('--gender <gender>', 'Filter by gender (e.g. male, female)')
+  .option('--accent <accent>', 'Filter by accent (e.g. american, british)')
+  .option('--tier <tier>', 'Filter by tier (e.g. free, premium)')
+  .action(async (opts: { gender?: string; accent?: string; tier?: string }) => {
+    // Resolve env from parent command (global --env option)
+    const env = (program.opts().env ?? 'production') as ApiEnv;
+    try {
+      const { voices } = await UserApiClient.getVoices(env);
+
+      // Only show enabled voices
+      let filtered = voices.filter((v: Voice) => v.enabled);
+
+      // Case-insensitive filtering
+      if (opts.gender) {
+        const g = opts.gender.toLowerCase();
+        filtered = filtered.filter((v: Voice) => v.gender.toLowerCase() === g);
+      }
+      if (opts.accent) {
+        const a = opts.accent.toLowerCase();
+        filtered = filtered.filter((v: Voice) => v.accent.toLowerCase() === a);
+      }
+      if (opts.tier) {
+        const t = opts.tier.toLowerCase();
+        filtered = filtered.filter((v: Voice) => v.tier.toLowerCase() === t);
+      }
+
+      // Sort by sortOrder
+      filtered.sort((a: Voice, b: Voice) => a.sortOrder - b.sortOrder);
+
+      if (filtered.length === 0) {
+        console.log('No matching voices found.');
+        return;
+      }
+
+      const rows = filtered.map((v: Voice) => [
+        v.displayName,
+        v.provider,
+        v.gender,
+        v.accent,
+        v.tier,
+      ]);
+      printTable(rows, ['Name', 'Provider', 'Gender', 'Accent', 'Tier']);
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+// ─── render-status ────────────────────────────────────────────────────────
+
+program
+  .command('render-status <intent-id>')
+  .description('Check the status of a render job')
+  .action(async (intentId: string) => {
+    const client = getUserClient();
+    try {
+      const resolvedId = await resolveIntentId(client, intentId);
+      const status = await client.getRenderStatus(resolvedId);
+
+      console.log(`Status: ${status.status}`);
+
+      if (status.jobId) {
+        console.log(`Job ID: ${status.jobId}`);
+      }
+
+      if (status.status === 'processing') {
+        console.log(`Progress: ${status.progress}%`);
+      }
+
+      if (status.status === 'failed' && status.errorMessage) {
+        console.log(`Error: ${status.errorMessage}`);
+      }
+
+      if (status.status === 'completed' && status.jobId) {
+        console.log(`Download with: nl download ${status.jobId}`);
+      }
+
+      if (status.status === 'none') {
+        console.log('No render job found. Configure and start a render first.');
+      }
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
 
 program.parse(process.argv);
