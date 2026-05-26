@@ -1376,7 +1376,7 @@ program
         v.accent,
         v.tier,
       ]);
-      printTable(rows, ['Name', 'Provider', 'Gender', 'Accent', 'Tier']);
+      printTable(rows, ['Name', 'Provider', 'Gender', 'Style', 'Tier']);
     } catch (err: unknown) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -1409,7 +1409,7 @@ program
       }
 
       if (status.status === 'completed' && status.jobId) {
-        console.log(`Download with: nl download ${status.jobId}`);
+        console.log(`Download with: neuralingual download ${status.jobId}`);
       }
 
       if (status.status === 'none') {
