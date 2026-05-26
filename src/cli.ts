@@ -1400,7 +1400,7 @@ program
         console.log(`Job ID: ${status.jobId}`);
       }
 
-      if (status.status === 'processing') {
+      if (status.status !== 'none') {
         console.log(`Progress: ${status.progress}%`);
       }
 
