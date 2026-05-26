@@ -13,9 +13,10 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, realpathSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { UserApiClient } from './user-client.js';
 import { loadAuth } from './auth-store.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
@@ -36,7 +37,15 @@ import type {
   RenderConfig,
 } from './types.js';
 import type { SetFileData } from './set-file.js';
-import manifest from './tool-manifest.json' with { type: 'json' };
+
+// Resolve through symlinks so this works when invoked via npm global bin symlink.
+// `import.meta.url` returns the symlink path (e.g. /opt/homebrew/bin/neuralingual-mcp);
+// `realpathSync` dereferences it to the real dist/ directory where tool-manifest.json lives.
+const __filename = realpathSync(fileURLToPath(import.meta.url));
+const __dirname = dirname(__filename);
+const manifest = JSON.parse(
+  readFileSync(join(__dirname, 'tool-manifest.json'), 'utf-8'),
+) as ToolManifest;
 
 const SERVER_NAME = 'neuralingual';
 const SERVER_VERSION = '0.5.0';
@@ -1125,7 +1134,7 @@ interface ToolManifest {
 
 export function buildUserServer(): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-  const tools = (manifest as unknown as ToolManifest).tools;
+  const tools = manifest.tools;
 
   for (const tool of tools) {
     const inputSchema = jsonSchemaToInputSchema(tool.parameters as JsonSchema);
