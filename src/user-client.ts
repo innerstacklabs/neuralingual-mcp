@@ -6,6 +6,7 @@ interface UserDto {
   id: string;
   email: string | null;
   displayName: string | null;
+  username: string | null;
   authProvider: string;
   tonePreference: string;
   completedOnboarding: boolean;
@@ -80,6 +81,7 @@ interface IntentDetail {
       text: string;
       tone: string;
       isEnabled: boolean;
+      feedback?: 'liked' | 'disliked' | null;
     }>;
     // Framework-first (#747) fields. Null on legacy/second-person sets.
     framework?: unknown;
@@ -162,6 +164,26 @@ interface ContextSettings {
   durationMinutes: number | null;
   repeatCount: number | null;
   backgroundVolume: number | null;
+  voiceId: string | null;
+  backgroundKey: string | null;
+  binauralPreset: string | null;
+  playbackMode: string | null;
+  binauralVolume: number | null;
+  subliminalEnabled: boolean | null;
+  subliminalVolume: number | null;
+}
+
+interface WizardDefaults {
+  voiceId: string | null;
+  backgroundKey: string | null;
+  backgroundVolume: number;
+  binauralPreset: string | null;
+  binauralVolume: number;
+  subliminalEnabled: boolean;
+  subliminalVolume: number;
+  durationMinutes: number | null;
+  playbackMode: string;
+  source: 'intent' | 'recent' | 'onboarding' | 'system';
 }
 
 /**
@@ -757,10 +779,133 @@ export class UserApiClient {
     return this.requestVoid('DELETE', `/context-settings/${encodeURIComponent(context)}`);
   }
 
+  // --- Username ---
+
+  /** Set or update the authenticated user's username via PATCH /auth/me. */
+  async setUsername(username: string): Promise<{ user: UserDto }> {
+    return this.request('PATCH', '/auth/me', { username });
+  }
+
+  /** Check username availability. */
+  async checkUsername(username: string): Promise<{ available: boolean; suggestion?: string; error?: string }> {
+    const qs = encodeURIComponent(username);
+    return this.request('GET', `/auth/username/available?username=${qs}`);
+  }
+
+  // --- Affirmation feedback & toggle ---
+
+  /** Set feedback (like/dislike/clear) on a single affirmation. */
+  async feedbackAffirmation(
+    affirmationId: string,
+    feedback: 'liked' | 'disliked' | null,
+  ): Promise<{ affirmation: { id: string; feedback: 'liked' | 'disliked' | null } }> {
+    return this.request('PATCH', `/affirmations/${encodeURIComponent(affirmationId)}/feedback`, { feedback });
+  }
+
+  /** Batch toggle isEnabled for multiple affirmations in one set. */
+  async batchToggleAffirmations(
+    setId: string,
+    affirmationIds: string[],
+    isEnabled: boolean,
+  ): Promise<{ affirmationSet: unknown }> {
+    return this.request('PATCH', `/affirmation-sets/${encodeURIComponent(setId)}/batch-toggle`, {
+      affirmationIds,
+      isEnabled,
+    });
+  }
+
+  // --- Affirmation management ---
+
+  /** Generate more affirmations for an existing set. Costs 1 credit. */
+  async generateMore(setId: string, count?: number): Promise<{ affirmationSet: unknown; added: number }> {
+    const body: Record<string, unknown> = {};
+    if (count !== undefined) body['count'] = count;
+    return this.request('POST', `/affirmation-sets/${encodeURIComponent(setId)}/generate-more`, body);
+  }
+
+  /** Add a custom (user-written) affirmation to a set. */
+  async addAffirmation(setId: string, text: string): Promise<{ affirmation: { id: string; text: string; tone: string; isEnabled: boolean } }> {
+    return this.request('POST', `/affirmation-sets/${encodeURIComponent(setId)}/affirmations`, { text });
+  }
+
+  /** Delete a single affirmation. Returns 204. */
+  async deleteAffirmation(affirmationId: string): Promise<void> {
+    return this.requestVoid('DELETE', `/affirmations/${encodeURIComponent(affirmationId)}`);
+  }
+
   // --- Affirmation sync ---
 
   async syncAffirmations(intentId: string, input: SyncAffirmationsInput): Promise<SyncAffirmationsResult> {
     return this.request('PUT', `/intents/${encodeURIComponent(intentId)}/affirmations/sync`, input);
+  }
+
+  // --- Wizard Defaults ---
+
+  async getWizardDefaults(intentId?: string): Promise<WizardDefaults> {
+    const qs = intentId ? `?intentId=${encodeURIComponent(intentId)}` : '';
+    return this.request('GET', `/wizard/defaults${qs}`);
+  }
+
+  // --- Source extraction ---
+
+  /** Extract text from a Twitter/X post URL. */
+  async extractTwitterPreview(url: string): Promise<{
+    text: string;
+    author: string | null;
+    authorHandle: string | null;
+    charCount: number;
+    truncated: boolean;
+  }> {
+    return this.request('POST', '/source/extract-twitter', { url });
+  }
+
+  // --- Catalog ---
+
+  /** Browse catalog sets. Public endpoint (auth sent but not required). */
+  async catalogBrowse(params?: {
+    context?: string;
+    sort?: string;
+    filter?: string;
+  }): Promise<{ sets: Array<Record<string, unknown>> }> {
+    const qs = new URLSearchParams();
+    if (params?.context) qs.set('context', params.context);
+    if (params?.sort) qs.set('sort', params.sort);
+    if (params?.filter) qs.set('filter', params.filter);
+    const query = qs.toString();
+    return this.request('GET', `/catalog${query ? `?${query}` : ''}`);
+  }
+
+  /** View a specific catalog item by slug. */
+  async catalogView(slug: string): Promise<Record<string, unknown>> {
+    return this.request('GET', `/catalog/${encodeURIComponent(slug)}`);
+  }
+
+  /** Copy a catalog set to the user's library. Requires auth. */
+  async catalogCopy(slug: string): Promise<{
+    intent: { id: string; title: string; emoji: string | null };
+    affirmationSet: { id: string; affirmations: Array<{ id: string; text: string; tone: string; isEnabled: boolean }> };
+  }> {
+    return this.request('POST', `/catalog/${encodeURIComponent(slug)}/copy`);
+  }
+
+  // --- Playback tracking ---
+
+  /** Start a playback session. Creates a PlaybackHistory record. */
+  async startPlayback(intentId: string, renderJobId?: string): Promise<{ id: string }> {
+    const body: Record<string, string> = { intentId };
+    if (renderJobId) body['renderJobId'] = renderJobId;
+    return this.request('POST', '/playback', body);
+  }
+
+  /** Update a playback session with duration and optional completion. */
+  async completePlayback(
+    playbackId: string,
+    durationSeconds: number,
+    completed?: boolean,
+  ): Promise<{ ok: true }> {
+    const body: Record<string, unknown> = { durationSeconds };
+    if (completed !== undefined) body['completed'] = completed;
+    return this.request('PATCH', `/playback/${encodeURIComponent(playbackId)}`, body);
   }
 
   // --- Manual intent creation (with affirmations) ---

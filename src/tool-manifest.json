@@ -33,7 +33,9 @@
             "description": "Search keyword to match against title, emoji, or context"
           }
         },
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -49,17 +51,19 @@
     },
     {
       "name": "nl_info",
-      "description": "Get detailed information about a practice set, including all affirmations, render config, and share status. Accepts full or short ID.",
+      "description": "Get detailed information about a playlist, including all affirmations, render config, and share status. Accepts full or short ID.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -106,7 +110,7 @@
     },
     {
       "name": "nl_create",
-      "description": "Create a new practice set. Provide intent text, source material (from a book, article, PDF, etc.), or both. When source is provided, AI generates affirmations grounded in that material. Costs 1 credit.",
+      "description": "Create a new playlist. Provide intent text, source material (from a book, article, PDF, etc.), or both. When source is provided, AI generates affirmations grounded in that material. Costs 1 credit.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -118,7 +122,11 @@
           },
           "tone": {
             "type": "string",
-            "enum": ["grounded", "open", "mystical"],
+            "enum": [
+              "grounded",
+              "open",
+              "mystical"
+            ],
             "description": "Tone preference: grounded (default), open, or mystical"
           },
           "sourceText": {
@@ -182,11 +190,16 @@
             "description": "New title"
           },
           "emoji": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "New emoji (or null to clear)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -201,7 +214,7 @@
     },
     {
       "name": "nl_sync_affirmations",
-      "description": "Declarative edit of affirmations in a practice set. Provide the complete desired list — affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them.",
+      "description": "Declarative edit of affirmations in a practice set. Provide the complete desired list \u2014 affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -230,13 +243,19 @@
                   "description": "Whether this affirmation is active"
                 }
               },
-              "required": ["text", "enabled"],
+              "required": [
+                "text",
+                "enabled"
+              ],
               "additionalProperties": false
             },
             "description": "Complete list of desired affirmations"
           }
         },
-        "required": ["id", "affirmations"],
+        "required": [
+          "id",
+          "affirmations"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -261,7 +280,9 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -295,7 +316,16 @@
           },
           "sessionContext": {
             "type": "string",
-            "enum": ["general", "sleep", "nap", "meditation", "workout", "focus", "walk", "chores"],
+            "enum": [
+              "general",
+              "sleep",
+              "nap",
+              "meditation",
+              "workout",
+              "focus",
+              "walk",
+              "chores"
+            ],
             "description": "Session context for pacing and tone"
           },
           "durationMinutes": {
@@ -311,7 +341,10 @@
             "description": "Pace in words per minute"
           },
           "backgroundAudioPath": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Background sound storageKey (from nl_voices background list), or null to disable"
           },
           "backgroundVolume": {
@@ -335,7 +368,12 @@
             "description": "Play all affirmations instead of fitting within duration"
           }
         },
-        "required": ["id", "voiceId", "sessionContext", "durationMinutes"],
+        "required": [
+          "id",
+          "voiceId",
+          "sessionContext",
+          "durationMinutes"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -360,7 +398,9 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -387,7 +427,9 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -414,7 +456,9 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -441,7 +485,9 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -467,7 +513,9 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -503,17 +551,19 @@
     },
     {
       "name": "nl_guide",
-      "description": "Render the framework (methodology, principles, sources, groupings, practical application, takeaway) for a practice set as markdown. Returns a clean fallback message for legacy sets that do not carry a framework — never errors on missing framework.",
+      "description": "Render the framework (methodology, principles, sources, groupings, practical application, takeaway) for a playlist as markdown. Returns a clean fallback message for legacy sets that do not carry a framework \u2014 never errors on missing framework.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -529,21 +579,23 @@
     },
     {
       "name": "nl_set_export",
-      "description": "Export a practice set as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_set_import. With withFramework=true, prepends the framework as markdown for human-facing contexts (the combined output is NOT re-importable via nl_set_import — apply expects pure YAML).",
+      "description": "Export a playlist as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_set_import. With withFramework=true, prepends the framework as markdown for human-facing contexts (the combined output is NOT re-importable via nl_set_import \u2014 apply expects pure YAML).",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           },
           "withFramework": {
             "type": "boolean",
             "description": "When true, prepend the framework as markdown before the YAML body. Default false (pure YAML, re-importable). Legacy sets without a framework render a fallback notice instead of failing."
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -574,7 +626,10 @@
             "description": "YAML content to apply (from nl_set_export, edited)"
           }
         },
-        "required": ["id", "yaml"],
+        "required": [
+          "id",
+          "yaml"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -586,6 +641,937 @@
       "handler": {
         "type": "custom",
         "customHandler": "setImport"
+      }
+    },
+    {
+      "name": "nl_user_profile",
+      "description": "Get the authenticated user's profile including username, display name, email, subscription tier, credit balance, and role.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/auth/me",
+        "auth": "jwt",
+        "note": "Returns the full user profile with username"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "userProfile"
+      }
+    },
+    {
+      "name": "nl_user_set_username",
+      "description": "Set or update the authenticated user's username. Usernames must be 3-30 characters, alphanumeric with underscores/hyphens. Returns the updated username and display name.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 30,
+            "description": "Desired username (3-30 chars, alphanumeric + underscores/hyphens)"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/auth/me",
+        "auth": "jwt",
+        "note": "Sets username field via the profile update endpoint"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "userSetUsername"
+      }
+    },
+    {
+      "name": "nl_user_check_username",
+      "description": "Check if a username is available. Returns availability status and a suggested alternative if the username is taken.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Username to check availability for"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/auth/username/available",
+        "auth": "jwt",
+        "note": "Public endpoint but routed through authenticated client for base URL resolution"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "userCheckUsername"
+      }
+    },
+    {
+      "name": "nl_catalog_browse",
+      "description": "Browse the curated catalog of playlists. Supports filtering by category, session context, and sorting. Returns metadata for each catalog item including title, description, category, audio availability, and duration.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "Filter by catalog category (client-side filter)"
+          },
+          "context": {
+            "type": "string",
+            "enum": [
+              "general",
+              "sleep",
+              "nap",
+              "meditation",
+              "workout",
+              "focus",
+              "walk",
+              "chores"
+            ],
+            "description": "Filter by session context"
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "recent",
+              "created",
+              "most-played",
+              "last-played",
+              "title"
+            ],
+            "description": "Sort order (default: curated order)"
+          },
+          "filter": {
+            "type": "string",
+            "enum": [
+              "has-audio",
+              "no-audio",
+              "never-played"
+            ],
+            "description": "Filter by audio/play status"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Maximum number of items to return (default: 20)"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of items to skip for pagination (default: 0)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/catalog",
+        "auth": "none",
+        "note": "Public endpoint. Category filtering and pagination are client-side; context/sort/filter are server-side query params."
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "catalogBrowse"
+      }
+    },
+    {
+      "name": "nl_catalog_view",
+      "description": "View a specific catalog item by slug. Returns full details including affirmations, framework, inspirations, voice info, and render configuration.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Catalog item slug (from nl_catalog_browse)"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/catalog/{slug}",
+        "auth": "none",
+        "note": "Public endpoint, no auth required."
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "catalogView"
+      }
+    },
+    {
+      "name": "nl_catalog_copy",
+      "description": "Copy a catalog playlist to the user's library. Creates a full copy including affirmations, render config, and pre-rendered audio. The new playlist appears in nl_library_list immediately.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Catalog item slug (from nl_catalog_browse or nl_catalog_view)"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/catalog/{slug}/copy",
+        "auth": "jwt",
+        "note": "Requires authentication. Rate-limited (same as intent creation)."
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "catalogCopy"
+      }
+    },
+    {
+      "name": "nl_library_list",
+      "description": "List all playlists (playlists) in the user's library with metadata including title, emoji, context, affirmation count, render status, play count, and last played date.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/library",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "libraryList"
+      }
+    },
+    {
+      "name": "nl_library_view",
+      "description": "View a specific playlist with its affirmations, render status, and play statistics. Shows each affirmation's text, enabled status, and feedback (liked/disliked). Accepts full or short ID.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/intents/{id}",
+        "auth": "jwt",
+        "note": "Fetches intent detail and formats as playlist view"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "libraryView"
+      }
+    },
+    {
+      "name": "nl_affirmations_feedback",
+      "description": "Set feedback (like or dislike) on one or more affirmations in a playlist. Supports batch: provide multiple affirmation IDs. Uses continue-on-error \u2014 partial failures are reported per-affirmation. Use null feedback to clear.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "affirmationIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 60,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Affirmation IDs to set feedback on (use nl_library_view to find IDs)"
+          },
+          "feedback": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "liked",
+              "disliked",
+              null
+            ],
+            "description": "Feedback value: 'liked', 'disliked', or null to clear"
+          }
+        },
+        "required": [
+          "id",
+          "affirmationIds",
+          "feedback"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/affirmations/{affirmationId}/feedback",
+        "auth": "jwt",
+        "note": "Iterates over individual affirmation feedback endpoints"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "affirmationsFeedback"
+      }
+    },
+    {
+      "name": "nl_affirmations_toggle",
+      "description": "Enable or disable one or more affirmations in a playlist. Supports batch: provide multiple affirmation IDs. All toggles are applied atomically in a single transaction.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "affirmationIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 60,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Affirmation IDs to toggle (use nl_library_view to find IDs)"
+          },
+          "isEnabled": {
+            "type": "boolean",
+            "description": "true to enable, false to disable"
+          }
+        },
+        "required": [
+          "id",
+          "affirmationIds",
+          "isEnabled"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/affirmation-sets/{setId}/batch-toggle",
+        "auth": "jwt",
+        "note": "Resolves intent to set, then calls batch-toggle endpoint"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "affirmationsToggle"
+      }
+    },
+    {
+      "name": "nl_context_settings_list",
+      "description": "List all per-context default settings (voice, duration, binaural, pace, background, etc.). Returns customized contexts only \u2014 contexts not listed use system defaults.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/context-settings",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "contextSettingsList"
+      }
+    },
+    {
+      "name": "nl_context_settings_update",
+      "description": "Update default settings for a specific session context. Set individual fields to override system defaults. Set a field to null to clear that override.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "string",
+            "enum": [
+              "general",
+              "sleep",
+              "nap",
+              "meditation",
+              "workout",
+              "focus",
+              "walk",
+              "chores"
+            ],
+            "description": "Session context to update defaults for"
+          },
+          "voiceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Default voice ID for this context (null to clear)"
+          },
+          "durationMinutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 60,
+            "description": "Default duration in minutes (null to clear)"
+          },
+          "binauralPreset": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "theta",
+              "alpha",
+              "beta",
+              null
+            ],
+            "description": "Default binaural beat preset (null to disable)"
+          },
+          "paceWpm": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 90,
+            "maximum": 220,
+            "description": "Default pace in words per minute (null to clear)"
+          },
+          "backgroundKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Default background sound key (null to disable)"
+          },
+          "backgroundVolume": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Default background volume 0-1 (null to clear)"
+          },
+          "binauralVolume": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Default binaural volume 0-1 (null to clear)"
+          },
+          "subliminalEnabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether subliminal layer is enabled by default (null to clear)"
+          },
+          "subliminalVolume": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Default subliminal volume 0-1 (null to clear)"
+          },
+          "playbackMode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "sequential",
+              "shuffle",
+              null
+            ],
+            "description": "Default playback mode (null to clear)"
+          },
+          "repeatCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Default repeat count per affirmation (null to clear)"
+          },
+          "pauseMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 500,
+            "maximum": 10000,
+            "description": "Default pause between affirmations in ms (null to clear)"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/context-settings/{context}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "contextSettingsUpdate"
+      }
+    },
+    {
+      "name": "nl_context_settings_reset",
+      "description": "Reset a context's settings to system defaults. Removes all custom overrides for the specified context.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "string",
+            "enum": [
+              "general",
+              "sleep",
+              "nap",
+              "meditation",
+              "workout",
+              "focus",
+              "walk",
+              "chores"
+            ],
+            "description": "Session context to reset"
+          }
+        },
+        "required": [
+          "context"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "DELETE",
+        "path": "/context-settings/{context}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "contextSettingsReset"
+      }
+    },
+    {
+      "name": "nl_wizard_defaults",
+      "description": "Get the resolved wizard defaults (voice, background, binaural, duration, playback mode). Returns the effective defaults based on a 4-level cascade: intent-specific config > recent config > onboarding preferences > system defaults.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intentId": {
+            "type": "string",
+            "description": "Optional intent ID to resolve intent-specific defaults from"
+          }
+        },
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/wizard/defaults",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "wizardDefaults"
+      }
+    },
+    {
+      "name": "nl_source_extract",
+      "description": "Extract text preview from a URL (article, blog post, etc.). Returns title, author, character count, and excerpt. Useful for previewing source material before feeding it into nl_create.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of the web page to extract text from"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/source/extract-preview",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "sourceExtract"
+      }
+    },
+    {
+      "name": "nl_source_youtube",
+      "description": "Extract transcript from a YouTube video URL. Returns title, channel name, character count, and video ID. The transcript can then be used as source material with nl_create.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "YouTube video URL (e.g. https://www.youtube.com/watch?v=...)"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/source/extract-youtube",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "sourceYoutube"
+      }
+    },
+    {
+      "name": "nl_source_twitter",
+      "description": "Extract thread text from a Twitter/X post URL. Returns the post text, author name, handle, and character count. The text can then be used as source material with nl_create.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Twitter/X post URL (e.g. https://x.com/user/status/...)"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/source/extract-twitter",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "sourceTwitter"
+      }
+    },
+    {
+      "name": "nl_source_pdf",
+      "description": "Upload a local PDF file and extract its text content. Returns the extracted text, page count, and character count. The text can then be used as source material with nl_create. Maximum file size is 10 MB.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filePath": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Absolute path to the PDF file on the local filesystem"
+          }
+        },
+        "required": [
+          "filePath"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/source/upload-pdf",
+        "auth": "jwt",
+        "note": "Reads local file, uploads as multipart form data"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "sourcePdf"
+      }
+    },
+    {
+      "name": "nl_playback_start",
+      "description": "Log the start of a practice session (playback). Creates a playback history record for the given playlist. The playlist must exist in the user's library. Optionally accepts a render job ID for analytics. Returns the playback record ID for use with nl_playback_complete.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "renderJobId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Render job ID for analytics tracking (optional)"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/playback",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "playbackStart"
+      }
+    },
+    {
+      "name": "nl_playback_complete",
+      "description": "Update a playback session with completion status. Records the duration in seconds and optionally marks the session as completed. Use the playback ID returned by nl_playback_start.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playback record ID (from nl_playback_start)"
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Duration of the playback session in seconds"
+          },
+          "completed": {
+            "type": "boolean",
+            "description": "Whether the session was fully completed (default: false)"
+          }
+        },
+        "required": [
+          "id",
+          "durationSeconds"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/playback/{id}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "playbackComplete"
+      }
+    },
+    {
+      "name": "nl_generate_more",
+      "description": "Generate additional affirmations for an existing playlist using AI. Adds new affirmations alongside the existing ones. Costs 1 credit. The count parameter is only honored for free regeneration (replacing removed affirmations); paid generation uses the server default batch size.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60,
+            "description": "Number of affirmations to generate (only honored for free regeneration; paid uses server default)"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/affirmation-sets/{setId}/generate-more",
+        "auth": "jwt",
+        "note": "Resolves intent to its latest affirmation set, then generates more affirmations"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "generateMore"
+      }
+    },
+    {
+      "name": "nl_affirmation_add",
+      "description": "Add a custom user-written affirmation to a playlist. The affirmation text must be 1-240 characters.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240,
+            "description": "Affirmation text to add"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/affirmation-sets/{setId}/affirmations",
+        "auth": "jwt",
+        "note": "Resolves intent to its latest affirmation set, then adds the affirmation"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "affirmationAdd"
+      }
+    },
+    {
+      "name": "nl_affirmation_delete",
+      "description": "Delete a single affirmation from a playlist. Cannot delete if it would leave fewer than 5 non-disliked enabled affirmations.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "affirmationId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "ID of the affirmation to delete (use nl_library_view to find IDs)"
+          }
+        },
+        "required": [
+          "id",
+          "affirmationId"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "DELETE",
+        "path": "/affirmations/{affirmationId}",
+        "auth": "jwt",
+        "note": "Validates affirmation belongs to the intent's latest set before deleting"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "affirmationDelete"
+      }
+    },
+    {
+      "name": "nl_intent_delete",
+      "description": "Delete a playlist (intent) permanently. This cannot be undone. Alias for nl_delete with consistent naming.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "DELETE",
+        "path": "/intents/{id}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "client-method",
+        "clientMethod": "deleteIntent",
+        "resolveId": true,
+        "responseFormat": "void",
+        "successMessage": "Deleted playlist {id}."
+      }
+    },
+    {
+      "name": "nl_intent_update",
+      "description": "Update a playlist's intent text, title, emoji, and/or tone preference. At least one field must be provided.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "New intent text (what you want to practice)"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "New title for the playlist"
+          },
+          "emoji": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New emoji (or null to clear)"
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "grounded",
+              "open",
+              "mystical"
+            ],
+            "description": "New tone preference"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/intents/{id}",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "intentUpdate"
       }
     }
   ]

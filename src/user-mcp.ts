@@ -74,6 +74,7 @@ async function withClient<T>(fn: (client: UserApiClient) => Promise<T>) {
 
 /**
  * Resolve a short/truncated intent ID to the full ID via library lookup.
+ * Supports exact match and unique prefix match.
  */
 async function resolveIntentId(client: UserApiClient, shortId: string): Promise<string> {
   const { items } = await client.getLibrary();
@@ -88,7 +89,67 @@ async function resolveIntentId(client: UserApiClient, shortId: string): Promise<
     );
   }
 
-  throw new Error('Practice set not found. Use nl_library to see available sets.');
+  throw new Error('Playlist not found. Use nl_library to see available sets.');
+}
+
+/**
+ * Resolve an intent to its latest affirmation set and validate that
+ * all provided affirmation IDs belong to it. Returns the set ID and
+ * validated IDs, or an error result for early return.
+ */
+async function resolveSetAndValidateAffirmations(
+  client: UserApiClient,
+  intentIdOrPrefix: string,
+  affirmationIds: string[],
+): Promise<
+  | { ok: true; setId: string }
+  | { ok: false; error: ReturnType<typeof errorResult> }
+> {
+  const resolvedId = await resolveIntentId(client, intentIdOrPrefix);
+  const { intent } = await client.getIntent(resolvedId);
+  if (!intent) {
+    return { ok: false, error: errorResult('Playlist not found.') };
+  }
+  const latestSet = intent.affirmationSets[0];
+  if (!latestSet) {
+    return { ok: false, error: errorResult('No affirmation set found for this playlist.') };
+  }
+
+  const setAffIds = new Set(latestSet.affirmations.map((a) => a.id));
+  const invalidIds = affirmationIds.filter((id) => !setAffIds.has(id));
+  if (invalidIds.length > 0) {
+    return {
+      ok: false,
+      error: errorResult(
+        `Affirmation IDs not found in this playlist: ${invalidIds.join(', ')}. Use nl_library_view to see affirmation IDs.`,
+      ),
+    };
+  }
+
+  return { ok: true, setId: latestSet.id };
+}
+
+/**
+ * Resolve an intent to its latest affirmation set ID. Simpler than
+ * resolveSetAndValidateAffirmations when no affirmation validation is needed.
+ */
+async function resolveLatestSetId(
+  client: UserApiClient,
+  intentIdOrPrefix: string,
+): Promise<
+  | { ok: true; intentId: string; setId: string }
+  | { ok: false; error: ReturnType<typeof errorResult> }
+> {
+  const resolvedId = await resolveIntentId(client, intentIdOrPrefix);
+  const { intent } = await client.getIntent(resolvedId);
+  if (!intent) {
+    return { ok: false, error: errorResult('Playlist not found.') };
+  }
+  const latestSet = intent.affirmationSets[0];
+  if (!latestSet) {
+    return { ok: false, error: errorResult('No affirmation set found for this playlist.') };
+  }
+  return { ok: true, intentId: resolvedId, setId: latestSet.id };
 }
 
 /**
@@ -102,7 +163,7 @@ async function fetchSetFileData(
 ): Promise<{ data: SetFileData; framework: unknown }> {
   const { intent } = await client.getIntent(intentId);
   if (!intent) {
-    throw new Error('Practice set not found. Use nl_library to see available sets.');
+    throw new Error('Playlist not found. Use nl_library to see available sets.');
   }
 
   const latestSet = intent.affirmationSets[0];
@@ -142,7 +203,7 @@ async function fetchSetFileData(
         affirmationRepeatCount: latestConfig.affirmationRepeatCount,
         includePreamble: latestConfig.includePreamble,
         playAll: latestConfig.playAll,
-        repetitionModel: latestConfig.repetitionModel ?? 'weighted_shuffle',
+        repetitionModel: latestConfig.repetitionModel ?? 'shuffle',
         binauralPreset: latestConfig.binauralPreset ?? null,
         binauralVolume: latestConfig.binauralVolume ?? null,
         subliminalEnabled: latestConfig.subliminalEnabled ?? false,
@@ -175,7 +236,7 @@ async function fetchSetFileData(
 }
 
 /**
- * Apply a YAML set file to an existing practice set.
+ * Apply a YAML set file to an existing playlist.
  */
 async function applySetFile(
   client: UserApiClient,
@@ -238,7 +299,7 @@ async function applySetFile(
 
   if (hasRenderFields) {
     if (!originalData.renderConfig) {
-      changes.push('render config: skipped (no existing config — run nl_render_configure first)');
+      changes.push('render config: skipped (no existing config -- run nl_render_configure first)');
     } else {
       const rc = originalData.renderConfig;
       const input: RenderConfigInput = {
@@ -293,11 +354,8 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const resolvedId = await resolveIntentId(client, params['id'] as string);
       const { intent } = await client.getIntent(resolvedId);
       if (!intent) {
-        return errorResult('Practice set not found. Use nl_library to see available sets.');
+        return errorResult('Playlist not found. Use nl_library to see available sets.');
       }
-      // Additive framework surfacing (#749). Spreads existing intent fields
-      // unchanged at the top level, adds three framework-metadata fields
-      // alongside so current consumers keep working.
       const latestSet = intent.affirmationSets[0];
       const framework = latestSet?.framework ?? null;
       // Strip framework + raw LLM payloads defensively.
@@ -308,8 +366,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         delete bag['rawAffirmationsLlm'];
         return bag;
       });
-      // Strip sourceText from response — it can be very large (up to 16k
-      // chars) and nl_info should show metadata only.
+      // Strip sourceText from response -- it can be very large
       const intentBag: Record<string, unknown> = { ...intent };
       delete intentBag['sourceText'];
       const response = {
@@ -327,7 +384,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const resolvedId = await resolveIntentId(client, params['id'] as string);
       const { intent } = await client.getIntent(resolvedId);
       if (!intent) {
-        return errorResult('Practice set not found. Use nl_library to see available sets.');
+        return errorResult('Playlist not found. Use nl_library to see available sets.');
       }
       const latestSet = intent.affirmationSets[0];
       const framework = latestSet?.framework ?? null;
@@ -355,7 +412,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       }));
       return textResult(
         matches.length === 0
-          ? `No practice sets found matching "${query}".`
+          ? `No playlists found matching "${query}".`
           : JSON.stringify(summary, null, 2),
       );
     }),
@@ -482,7 +539,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
             truncated: preview.truncated,
           };
         } catch {
-          // Preview failure is non-fatal — generation will still extract
+          // Preview failure is non-fatal
         }
       }
 
@@ -557,7 +614,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         }
       }
       if (!item) {
-        return errorResult('Practice set not found. Use nl_library to see available sets.');
+        return errorResult('Playlist not found. Use nl_library to see available sets.');
       }
       const renderJob = item.latestRenderJob;
       if (!renderJob?.id) {
@@ -585,6 +642,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(
         JSON.stringify(
           {
+            username: user.username,
             creditBalance: user.creditBalance,
             subscriptionCredits: user.subscriptionCredits,
             purchasedCredits: user.purchasedCredits,
@@ -621,6 +679,409 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const result = await applySetFile(client, resolvedId, params['yaml'] as string, originalData);
       return textResult(result);
     }),
+
+  // ── Username tools ──────────────────────────────────────────────────
+
+  userProfile: async () =>
+    withClient(async (client) => {
+      const { user } = await client.getMe();
+      return textResult(
+        JSON.stringify(
+          {
+            id: user.id,
+            email: user.email,
+            displayName: user.displayName,
+            username: user.username,
+            tonePreference: user.tonePreference,
+            subscriptionTier: user.subscriptionTier,
+            subscriptionStatus: user.subscriptionStatus,
+            creditBalance: user.creditBalance,
+            role: user.role,
+            createdAt: user.createdAt ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }),
+
+  userSetUsername: async (params) =>
+    withClient(async (client) => {
+      const username = params['username'] as string;
+      const result = await client.setUsername(username);
+      return textResult(
+        JSON.stringify(
+          {
+            username: result.user.username,
+            displayName: result.user.displayName,
+          },
+          null,
+          2,
+        ),
+      );
+    }),
+
+  userCheckUsername: async (params) =>
+    withClient(async (client) => {
+      const username = params['username'] as string;
+      const result = await client.checkUsername(username);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  // ── Catalog tools ───────────────────────────────────────────────────
+
+  catalogBrowse: async (params) =>
+    withClient(async (client) => {
+      const category = params['category'] as string | undefined;
+      const context = params['context'] as string | undefined;
+      const sort = params['sort'] as string | undefined;
+      const filter = params['filter'] as string | undefined;
+      const limit = (params['limit'] as number | undefined) ?? 20;
+      const offset = (params['offset'] as number | undefined) ?? 0;
+      const data = await client.catalogBrowse({
+        ...(context ? { context } : {}),
+        ...(sort ? { sort } : {}),
+        ...(filter ? { filter } : {}),
+      });
+      let sets = data.sets;
+      // Client-side category filter (not supported as API query param)
+      if (category) {
+        const c = category.toLowerCase();
+        sets = sets.filter((s) => String(s['catalogCategory'] ?? '').toLowerCase() === c);
+      }
+      const total = sets.length;
+      // Client-side pagination
+      sets = sets.slice(offset, offset + limit);
+      // Summarize for token efficiency
+      const summary = sets.map((s) => ({
+        slug: s['slug'],
+        title: s['title'],
+        emoji: s['emoji'],
+        catalogCategory: s['catalogCategory'],
+        catalogDescription: s['catalogDescription'],
+        sessionContext: s['sessionContext'],
+        tonePreference: s['tonePreference'],
+        hasAudio: s['hasAudio'],
+        affirmationCount: s['affirmationCount'],
+        durationSeconds: s['durationSeconds'],
+      }));
+      return textResult(JSON.stringify({ items: summary, total, limit, offset }, null, 2));
+    }),
+
+  catalogView: async (params) =>
+    withClient(async (client) => {
+      const slug = params['slug'] as string;
+      const data = await client.catalogView(slug);
+      return textResult(JSON.stringify(data, null, 2));
+    }),
+
+  catalogCopy: async (params) =>
+    withClient(async (client) => {
+      const slug = params['slug'] as string;
+      const result = await client.catalogCopy(slug);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  // ── Library tools ───────────────────────────────────────────────────
+
+  libraryList: async () =>
+    withClient(async (client) => {
+      const { items } = await client.getLibrary();
+      const summary = items.map((item) => ({
+        id: item.intent.id,
+        title: item.intent.title,
+        emoji: item.intent.emoji,
+        context: item.intent.sessionContext,
+        affirmationCount: item.latestAffirmationSet?.affirmationCount ?? 0,
+        renderStatus: item.latestRenderJob?.status ?? 'none',
+        playCount: item.stats?.playCount ?? 0,
+        lastPlayedAt: item.stats?.lastPlayedAt ?? null,
+        createdAt: item.intent.createdAt,
+        updatedAt: item.intent.updatedAt,
+      }));
+      return textResult(JSON.stringify(summary, null, 2));
+    }),
+
+  libraryView: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const { intent, stats } = await client.getIntent(resolvedId);
+      if (!intent) {
+        return errorResult('Playlist not found. Use nl_library_list to see available sets.');
+      }
+      const latestSet = intent.affirmationSets[0];
+      const affirmations = (latestSet?.affirmations ?? []).map((a) => ({
+        id: a.id,
+        text: a.text,
+        tone: a.tone,
+        isEnabled: a.isEnabled,
+        feedback: a.feedback ?? null,
+      }));
+      const latestConfig = latestSet
+        ? intent.renderConfigs.find((rc) => rc.affirmationSetId === latestSet.id)
+        : intent.renderConfigs[0] ?? null;
+      const latestRenderJob = latestConfig?.renderJobs?.[0] ?? null;
+
+      const response = {
+        id: intent.id,
+        title: intent.title,
+        emoji: intent.emoji,
+        context: intent.sessionContext,
+        tonePreference: intent.tonePreference,
+        affirmationCount: affirmations.length,
+        affirmations,
+        renderStatus: latestRenderJob?.status ?? 'none',
+        renderProgress: latestRenderJob?.progress ?? 0,
+        stats: stats ?? null,
+        createdAt: intent.createdAt,
+        updatedAt: intent.updatedAt,
+      };
+      return textResult(JSON.stringify(response, null, 2));
+    }),
+
+  // ── Affirmation management tools ────────────────────────────────────
+
+  affirmationsFeedback: async (params) =>
+    withClient(async (client) => {
+      const affirmationIds = params['affirmationIds'] as string[];
+      const feedback = params['feedback'] as 'liked' | 'disliked' | null;
+
+      const resolved = await resolveSetAndValidateAffirmations(
+        client,
+        params['id'] as string,
+        affirmationIds,
+      );
+      if (!resolved.ok) return resolved.error;
+
+      // Process each affirmation, collecting results (continue-on-error)
+      const results: Array<{ id: string; success: boolean; error?: string }> = [];
+      for (const affId of affirmationIds) {
+        try {
+          await client.feedbackAffirmation(affId, feedback);
+          results.push({ id: affId, success: true });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          results.push({ id: affId, success: false, error: msg });
+        }
+      }
+
+      const succeeded = results.filter((r) => r.success).length;
+      const failed = results.filter((r) => !r.success).length;
+
+      return textResult(
+        JSON.stringify(
+          {
+            feedback,
+            total: affirmationIds.length,
+            succeeded,
+            failed,
+            ...(failed > 0 ? { errors: results.filter((r) => !r.success) } : {}),
+          },
+          null,
+          2,
+        ),
+      );
+    }),
+
+  affirmationsToggle: async (params) =>
+    withClient(async (client) => {
+      const affirmationIds = params['affirmationIds'] as string[];
+      const isEnabled = params['isEnabled'] as boolean;
+
+      const resolved = await resolveSetAndValidateAffirmations(
+        client,
+        params['id'] as string,
+        affirmationIds,
+      );
+      if (!resolved.ok) return resolved.error;
+
+      await client.batchToggleAffirmations(resolved.setId, affirmationIds, isEnabled);
+
+      return textResult(
+        JSON.stringify(
+          {
+            isEnabled,
+            toggled: affirmationIds.length,
+            affirmationIds,
+          },
+          null,
+          2,
+        ),
+      );
+    }),
+
+  // ── Context Settings tools ─────────────────────────────────────────
+
+  contextSettingsList: async () =>
+    withClient(async (client) => {
+      const { settings } = await client.getContextSettings();
+      return textResult(JSON.stringify(settings, null, 2));
+    }),
+
+  contextSettingsUpdate: async (params) =>
+    withClient(async (client) => {
+      const context = params['context'] as string;
+      const data: Record<string, unknown> = {};
+      if (params['voiceId'] !== undefined) data['voiceId'] = params['voiceId'];
+      if (params['durationMinutes'] !== undefined) data['durationMinutes'] = params['durationMinutes'];
+      if (params['binauralPreset'] !== undefined) data['binauralPreset'] = params['binauralPreset'];
+      if (params['paceWpm'] !== undefined) data['paceWpm'] = params['paceWpm'];
+      if (params['backgroundKey'] !== undefined) data['backgroundKey'] = params['backgroundKey'];
+      if (params['backgroundVolume'] !== undefined) data['backgroundVolume'] = params['backgroundVolume'];
+      if (params['binauralVolume'] !== undefined) data['binauralVolume'] = params['binauralVolume'];
+      if (params['subliminalEnabled'] !== undefined) data['subliminalEnabled'] = params['subliminalEnabled'];
+      if (params['subliminalVolume'] !== undefined) data['subliminalVolume'] = params['subliminalVolume'];
+      if (params['playbackMode'] !== undefined) data['playbackMode'] = params['playbackMode'];
+      if (params['repeatCount'] !== undefined) data['repeatCount'] = params['repeatCount'];
+      if (params['pauseMs'] !== undefined) data['pauseMs'] = params['pauseMs'];
+
+      const { settings } = await client.updateContextSettings(context, data);
+      return textResult(JSON.stringify(settings, null, 2));
+    }),
+
+  contextSettingsReset: async (params) =>
+    withClient(async (client) => {
+      const context = params['context'] as string;
+      await client.deleteContextSettings(context);
+      return textResult(`Context "${context}" reset to system defaults.`);
+    }),
+
+  wizardDefaults: async (params) =>
+    withClient(async (client) => {
+      const intentId = params['intentId'] as string | undefined;
+      const defaults = await client.getWizardDefaults(intentId);
+      return textResult(JSON.stringify(defaults, null, 2));
+    }),
+
+  // ── Source extraction tools ────────────────────────────────────────
+
+  sourceExtract: async (params) =>
+    withClient(async (client) => {
+      const url = params['url'] as string;
+      const result = await client.extractUrlPreview(url);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  sourceYoutube: async (params) =>
+    withClient(async (client) => {
+      const url = params['url'] as string;
+      const result = await client.extractYoutubePreview(url);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  sourceTwitter: async (params) =>
+    withClient(async (client) => {
+      const url = params['url'] as string;
+      const result = await client.extractTwitterPreview(url);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  sourcePdf: async (params) =>
+    withClient(async (client) => {
+      const filePath = params['filePath'] as string;
+
+      const { readFileSync, existsSync: fsExistsSync } = await import('node:fs');
+      if (!fsExistsSync(filePath)) {
+        return errorResult(`File not found: ${filePath}`);
+      }
+
+      const buffer = readFileSync(filePath);
+      if (buffer.length > 10 * 1024 * 1024) {
+        return errorResult('PDF file is too large. Maximum size is 10 MB.');
+      }
+
+      const result = await client.uploadPdf(buffer);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  // ── Playback tracking tools ──────────────────────────────────────────
+
+  playbackStart: async (params) =>
+    withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const renderJobId = params['renderJobId'] as string | undefined;
+      const result = await client.startPlayback(resolvedId, renderJobId);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  playbackComplete: async (params) =>
+    withClient(async (client) => {
+      const id = params['id'] as string;
+      const durationSeconds = params['durationSeconds'] as number;
+      const completed = params['completed'] as boolean | undefined;
+      const result = await client.completePlayback(id, durationSeconds, completed);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  // ── Affirmation + Intent management tools ──────────────────────────
+
+  generateMore: async (params) =>
+    withClient(async (client) => {
+      const resolved = await resolveLatestSetId(client, params['id'] as string);
+      if (!resolved.ok) return resolved.error;
+
+      const count = params['count'] as number | undefined;
+      const result = await client.generateMore(resolved.setId, count);
+      return textResult(
+        JSON.stringify(
+          {
+            setId: resolved.setId,
+            added: result.added,
+            message: `Generated ${result.added} new affirmation(s).`,
+          },
+          null,
+          2,
+        ),
+      );
+    }),
+
+  affirmationAdd: async (params) =>
+    withClient(async (client) => {
+      const text = params['text'] as string;
+      const resolved = await resolveLatestSetId(client, params['id'] as string);
+      if (!resolved.ok) return resolved.error;
+
+      const result = await client.addAffirmation(resolved.setId, text);
+      return textResult(JSON.stringify(result, null, 2));
+    }),
+
+  affirmationDelete: async (params) =>
+    withClient(async (client) => {
+      const affirmationId = params['affirmationId'] as string;
+
+      // Validate affirmation belongs to the intent's latest set
+      const resolved = await resolveSetAndValidateAffirmations(
+        client,
+        params['id'] as string,
+        [affirmationId],
+      );
+      if (!resolved.ok) return resolved.error;
+
+      await client.deleteAffirmation(affirmationId);
+      return textResult(`Deleted affirmation ${affirmationId}.`);
+    }),
+
+  intentUpdate: async (params) => {
+    const text = params['text'] as string | undefined;
+    const title = params['title'] as string | undefined;
+    const emoji = params['emoji'] as string | null | undefined;
+    const tone = params['tone'] as string | undefined;
+
+    if (text === undefined && title === undefined && emoji === undefined && tone === undefined) {
+      return errorResult('At least one of text, title, emoji, or tone must be provided.');
+    }
+
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      const input: { intentText?: string; title?: string; emoji?: string | null; tonePreference?: string | null } = {};
+      if (text !== undefined) input.intentText = text;
+      if (title !== undefined) input.title = title;
+      if (emoji !== undefined) input.emoji = emoji;
+      if (tone !== undefined) input.tonePreference = tone;
+      const result = await client.updateIntent(resolvedId, input);
+      return textResult(JSON.stringify(result, null, 2));
+    });
+  },
 };
 
 // ── Manifest types ────────────────────────────────────────────────────────
@@ -664,7 +1125,7 @@ interface ToolManifest {
 
 export function buildUserServer(): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-  const tools = (manifest as ToolManifest).tools;
+  const tools = (manifest as unknown as ToolManifest).tools;
 
   for (const tool of tools) {
     const inputSchema = jsonSchemaToInputSchema(tool.parameters as JsonSchema);
