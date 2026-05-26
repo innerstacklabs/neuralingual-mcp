@@ -94,7 +94,7 @@ Add to your `.mcp.json` (Claude Code) or MCP client config:
 
 **Prerequisite:** Run `neuralingual login` first to authenticate.
 
-### MCP Tools (43 tools)
+### MCP Tools (44 tools)
 
 **Library & Discovery**
 
@@ -178,6 +178,7 @@ Add to your `.mcp.json` (Claude Code) or MCP client config:
 | `nl_user_check_username` | Check username availability |
 | `nl_credits` | Check credit balance |
 | `nl_share` | Generate a public share link |
+| `nl_unshare` | Revoke a public share link |
 
 ### Example (Claude Code)
 
