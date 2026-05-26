@@ -37,6 +37,10 @@
   ],
   "license": "MIT",
   "homepage": "https://github.com/innerstacklabs/neuralingual-mcp#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "devDependencies": {
     "@types/node": "^22.19.17",
     "typescript": "~5.8.0",
