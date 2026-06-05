@@ -435,14 +435,14 @@ describe('nl_create', () => {
 
     const result = parseResult(await handler({ text: 'Be confident' }));
     expect(result.data.intent.id).toBe('new-1');
-    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be confident', undefined, undefined);
+    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be confident', undefined, undefined, undefined, undefined);
   });
 
   it('passes tone parameter when provided', async () => {
     mockClient.createAndGenerate.mockResolvedValue({ intent: {}, affirmationSet: {} });
 
     await handler({ text: 'Be mystical', tone: 'mystical' });
-    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be mystical', 'mystical', undefined);
+    expect(mockClient.createAndGenerate).toHaveBeenCalledWith('Be mystical', 'mystical', undefined, undefined, undefined);
   });
 });
 
