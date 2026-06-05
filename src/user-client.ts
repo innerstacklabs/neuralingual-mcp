@@ -1,6 +1,11 @@
-import type { ApiEnv, IntentStats, LibraryQueryParams, RenderConfigInput, RenderConfig, RenderStatus, SyncAffirmationsInput, SyncAffirmationsResult, Voice } from './types.js';
+import type { ApiEnv, IntentStats, LibraryQueryParams, RenderConfigInput, RenderConfig, RenderStatus, SyncAffirmationsInput, SyncAffirmationsResult } from './types.js';
 import { API_BASE_URLS } from './types.js';
 import { loadAuth, saveAuth, clearAuth } from './auth-store.js';
+import type { ResumeBlockingOutcome } from './streaming/generation-stream.js';
+import { mapResumeJsonToOutcome } from './streaming/generation-stream.js';
+import { McpError, classifyStatus, networkErrorToMcpError } from './mcp-error.js';
+import { emitMcpFailure } from './mcp-telemetry.js';
+import { normalizeMethod, runWithGetRetry } from './mcp-retry.js';
 
 interface UserDto {
   id: string;
@@ -84,6 +89,9 @@ interface IntentDetail {
       feedback?: 'liked' | 'disliked' | null;
     }>;
     // Framework-first (#747) fields. Null on legacy/second-person sets.
+    // Typed as `unknown` here to keep the mcp package free of the zod schema
+    // from `@neuralingual/llm` — the renderer (`framework-render.ts`) handles
+    // shape-tolerant parsing.
     framework?: unknown;
     schemaVersion?: number | null;
     generationStatus?: 'complete' | 'framework_only' | 'failed' | null;
@@ -188,8 +196,9 @@ interface WizardDefaults {
 
 /**
  * Rate-limit metadata surfaced from successful (2xx) responses. Parsed from
- * `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`.
- * Returns `null` when the server didn't emit the headers.
+ * `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`. Added
+ * for #855 so `nl create` can print "Quota: 3/10 remaining this hour." on
+ * success. Returns `null` when the server didn't emit the headers.
  */
 export interface RateLimitMeta {
   limit: number;
@@ -211,8 +220,8 @@ function parseRateLimitMeta(headers: Headers): RateLimitMeta | undefined {
 
 /**
  * Parse retry-after timing from a 429 response. Precedence:
- *   1. `Retry-After` header (RFC 9110 preferred -- seconds, or HTTP-date)
- *   2. Body `retryAfterMs` (structured 429)
+ *   1. `Retry-After` header (RFC 9110 preferred — seconds, or HTTP-date)
+ *   2. Body `retryAfterMs` (#855 structured 429)
  *   3. `X-RateLimit-Reset` header (legacy)
  *   4. Body `resetAt` ISO string (legacy)
  * Falls back to 60s when no signal is present.
@@ -234,7 +243,7 @@ function parse429Timing(
       return { resetAt: asDate, retryAfterMs: Math.max(1000, asDate - Date.now()) };
     }
   }
-  // 2. Body retry_after_ms (snake_case; camelCase fallback)
+  // 2. Body retry_after_ms (snake_case per #855 contract; camelCase fallback)
   if (body) {
     const retryMs =
       typeof body['retry_after_ms'] === 'number'
@@ -247,7 +256,7 @@ function parse429Timing(
       return { resetAt: Date.now() + ms, retryAfterMs: ms };
     }
   }
-  // 3. X-RateLimit-Reset header (legacy -- accepts numeric epoch-ms or ISO string)
+  // 3. X-RateLimit-Reset header (legacy — accepts numeric epoch-ms or ISO string)
   const resetHeader = headers.get('x-ratelimit-reset');
   if (resetHeader !== null) {
     let resetAt: number | null = null;
@@ -275,7 +284,7 @@ function parse429Timing(
   } else if (typeof resetBody === 'number') {
     return { resetAt: resetBody, retryAfterMs: Math.max(1000, resetBody - Date.now()) };
   }
-  // No signal -- default to 60s.
+  // No signal — default to 60s.
   return { resetAt: null, retryAfterMs: 60_000 };
 }
 
@@ -369,83 +378,42 @@ export class UserApiClient {
     return { client, user: result.user };
   }
 
-  /** Fetch available voices. Public endpoint — no auth required. */
-  static async getVoices(env?: ApiEnv): Promise<{ voices: Voice[] }> {
-    const auth = loadAuth();
-    const baseUrl = API_BASE_URLS[env ?? auth?.env ?? 'production'];
-    const res = await fetch(`${baseUrl}/voices`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json() as Promise<{ voices: Voice[] }>;
-  }
-
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const doRequest = async (token: string): Promise<Response> => {
-      const url = `${this.baseUrl}${path}`;
-      const headers: Record<string, string> = {
-        'X-Access-Token': token,
-      };
-      if (body !== undefined) {
-        headers['Content-Type'] = 'application/json';
-      }
-      const init: RequestInit = { method, headers };
-      if (body !== undefined) {
-        init.body = JSON.stringify(body);
-      }
-      return fetch(url, init);
-    };
-
-    let res = await doRequest(this.accessToken);
-
-    // Auto-refresh on 401
-    if (res.status === 401) {
-      const refreshed = await this.tryRefresh();
-      if (refreshed) {
-        res = await doRequest(this.accessToken);
-      }
-    }
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => null) as Record<string, unknown> | null;
-      if (res.status === 429) {
-        const { resetAt, retryAfterMs } = parse429Timing(res.headers, data);
-        const errMsg =
-          (data && typeof data['message'] === 'string' && (data['message'] as string)) ||
-          (data && typeof data['error'] === 'string' && (data['error'] as string)) ||
-          'HTTP 429 (rate limited)';
-        const source =
-          data && typeof data['source'] === 'string' ? (data['source'] as string) : undefined;
-        const err = new Error(errMsg) as Error & {
-          status: 429;
-          resetAt: number | null;
-          retryAfterMs: number;
-          source?: string;
-        };
-        err.status = 429;
-        err.resetAt = resetAt;
-        err.retryAfterMs = retryAfterMs;
-        if (source !== undefined) err.source = source;
-        throw err;
-      }
-      const bodyMsg =
+  /**
+   * Build the unified `McpError` (#2867) for a non-ok response, preserving the
+   * back-compat extras callers already read: 429 timing (`resetAt`,
+   * `retryAfterMs`, `source`, from #806/#855) and the `HTTP <status>: <msg>`
+   * message format (#1179). Returns an `McpError` whose `.status` matches the
+   * pre-#2867 plain-Error shape, so existing call sites keep working.
+   */
+  private buildHttpError(res: Response, data: Record<string, unknown> | null): McpError {
+    if (res.status === 429) {
+      const { resetAt, retryAfterMs } = parse429Timing(res.headers, data);
+      const errMsg =
         (data && typeof data['message'] === 'string' && (data['message'] as string)) ||
         (data && typeof data['error'] === 'string' && (data['error'] as string)) ||
-        undefined;
-      const errMsg = bodyMsg
-        ? `HTTP ${res.status}: ${bodyMsg}`
-        : `HTTP ${res.status}`;
-      const err = new Error(errMsg) as Error & { status: number };
-      err.status = res.status;
-      throw err;
+        'HTTP 429 (rate limited)';
+      const source =
+        data && typeof data['source'] === 'string' ? (data['source'] as string) : undefined;
+      const { code, retryable } = classifyStatus(429);
+      return new McpError(
+        { code, message: errMsg, status: 429, retryable },
+        source !== undefined ? { resetAt, retryAfterMs, source } : { resetAt, retryAfterMs },
+      );
     }
-
-    return res.json() as Promise<T>;
+    // #1179 — Include HTTP status in non-429 errors. Prefer body.message
+    // (human-readable) over body.error (machine code).
+    const bodyMsg =
+      (data && typeof data['message'] === 'string' && (data['message'] as string)) ||
+      (data && typeof data['error'] === 'string' && (data['error'] as string)) ||
+      undefined;
+    const errMsg = bodyMsg ? `HTTP ${res.status}: ${bodyMsg}` : `HTTP ${res.status}`;
+    const { code, retryable } = classifyStatus(res.status);
+    return new McpError({ code, message: errMsg, status: res.status, retryable });
   }
 
-  private async requestWithRateMeta<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-  ): Promise<{ data: T; rateLimit?: RateLimitMeta }> {
+  /** Fetch with one-shot 401 refresh-and-retry. The 401 refresh is orthogonal
+   *  to the transient-retry loop (401 is non-retryable there). */
+  private async fetchWithRefresh(method: string, path: string, body?: unknown): Promise<Response> {
     const doRequest = async (token: string): Promise<Response> => {
       const url = `${this.baseUrl}${path}`;
       const headers: Record<string, string> = { 'X-Access-Token': token };
@@ -454,44 +422,76 @@ export class UserApiClient {
       if (body !== undefined) init.body = JSON.stringify(body);
       return fetch(url, init);
     };
-
     let res = await doRequest(this.accessToken);
     if (res.status === 401) {
       const refreshed = await this.tryRefresh();
       if (refreshed) res = await doRequest(this.accessToken);
     }
+    return res;
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    // Normalize for retry gating — GET is idempotent (#2867).
+    const { httpMethod } = normalizeMethod(method);
+    // Bounded transient retry on idempotent GETs only (#2867).
+    return runWithGetRetry<T>({
+      httpMethod,
+      path,
+      doFetch: () => this.fetchWithRefresh(httpMethod, path, body),
+      // Explicit `res: Response` (not just inferred) so this file typechecks
+      // under the public repo's stricter tsconfig regardless of how the
+      // runWithGetRetry import resolves. (#3068)
+      onOk: (res: Response) => res.json() as Promise<T>,
+      onError: async (res: Response) => {
+        const data = await res.json().catch(() => null) as Record<string, unknown> | null;
+        return this.buildHttpError(res, data);
+      },
+    });
+  }
+
+  /**
+   * Like request(), but also returns the response's rate-limit headers so
+   * the caller (e.g., `nl create`) can show "Quota: N/Y remaining this hour."
+   * after a successful mutation. Non-success responses still throw, same as
+   * request(). Added for #855 — the vanilla `request()` return shape is used
+   * by dozens of callers and changing it would be too invasive.
+   */
+  private async requestWithRateMeta<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ data: T; rateLimit?: RateLimitMeta }> {
+    let res: Response;
+    try {
+      res = await this.fetchWithRefresh(method, path, body);
+    } catch (cause) {
+      // Transport rejection (network/timeout) before any Response — converge on
+      // the unified McpError + telemetry just like request() (#2867). No retry:
+      // this path serves the non-idempotent generate mutation.
+      const err = networkErrorToMcpError(cause);
+      emitMcpFailure({
+        method: method.toUpperCase(),
+        path,
+        code: err.code,
+        status: err.status,
+        retryable: err.retryable,
+      });
+      throw err;
+    }
 
     if (!res.ok) {
+      // Converge on the unified error (#2867) via the shared builder. No
+      // transient retry here — this path serves mutations (POST /affirmations
+      // /generate), which are NOT idempotent.
       const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-      if (res.status === 429) {
-        const { resetAt, retryAfterMs } = parse429Timing(res.headers, data);
-        const errMsg =
-          (data && typeof data['message'] === 'string' && (data['message'] as string)) ||
-          (data && typeof data['error'] === 'string' && (data['error'] as string)) ||
-          'HTTP 429 (rate limited)';
-        const source =
-          data && typeof data['source'] === 'string' ? (data['source'] as string) : undefined;
-        const err = new Error(errMsg) as Error & {
-          status: 429;
-          resetAt: number | null;
-          retryAfterMs: number;
-          source?: string;
-        };
-        err.status = 429;
-        err.resetAt = resetAt;
-        err.retryAfterMs = retryAfterMs;
-        if (source !== undefined) err.source = source;
-        throw err;
-      }
-      const bodyMsg =
-        (data && typeof data['message'] === 'string' && (data['message'] as string)) ||
-        (data && typeof data['error'] === 'string' && (data['error'] as string)) ||
-        undefined;
-      const errMsg = bodyMsg
-        ? `HTTP ${res.status}: ${bodyMsg}`
-        : `HTTP ${res.status}`;
-      const err = new Error(errMsg) as Error & { status: number };
-      err.status = res.status;
+      const err = this.buildHttpError(res, data);
+      emitMcpFailure({
+        method: method.toUpperCase(),
+        path,
+        code: err.code,
+        status: err.status,
+        retryable: err.retryable,
+      });
       throw err;
     }
 
@@ -502,67 +502,65 @@ export class UserApiClient {
 
   /** Request that returns no body (for DELETE 204 responses). */
   private async requestVoid(method: string, path: string): Promise<void> {
-    const doRequest = async (token: string): Promise<Response> => {
-      const url = `${this.baseUrl}${path}`;
-      return fetch(url, {
-        method,
-        headers: { 'X-Access-Token': token },
+    let res: Response;
+    try {
+      res = await this.fetchWithRefresh(method, path);
+    } catch (cause) {
+      // Transport rejection — unified McpError + telemetry (#2867). DELETE is a
+      // mutation → no retry.
+      const err = networkErrorToMcpError(cause);
+      emitMcpFailure({
+        method: method.toUpperCase(),
+        path,
+        code: err.code,
+        status: err.status,
+        retryable: err.retryable,
       });
-    };
-
-    let res = await doRequest(this.accessToken);
-
-    if (res.status === 401) {
-      const refreshed = await this.tryRefresh();
-      if (refreshed) {
-        res = await doRequest(this.accessToken);
-      }
+      throw err;
     }
 
     if (!res.ok) {
+      // DELETE is a mutation → no transient retry. Converge on McpError (#2867)
+      // while preserving the parsed `.data` body some callers read.
       const text = await res.text();
-      let bodyMsg: string | undefined;
       let bodyData: Record<string, unknown> | undefined;
       try {
-        const data = JSON.parse(text) as Record<string, unknown>;
-        bodyData = data;
-        if (typeof data['message'] === 'string') bodyMsg = data['message'];
-        else if (typeof data['error'] === 'string') bodyMsg = data['error'];
-      } catch { /* use default */ }
-      const errMsg = bodyMsg ? `HTTP ${res.status}: ${bodyMsg}` : `HTTP ${res.status}`;
-      const err = new Error(errMsg) as Error & { status: number; data?: Record<string, unknown> };
-      err.status = res.status;
+        bodyData = JSON.parse(text) as Record<string, unknown>;
+      } catch { /* leave undefined */ }
+      const err = this.buildHttpError(res, bodyData ?? null);
       if (bodyData) err.data = bodyData;
+      emitMcpFailure({
+        method: method.toUpperCase(),
+        path,
+        code: err.code,
+        status: err.status,
+        retryable: err.retryable,
+      });
       throw err;
     }
   }
 
-  /** Request that returns raw bytes (for audio download). */
+  /** Request that returns raw bytes (for audio download). GET → idempotent,
+   *  so it gets the same bounded transient retry as request() (#2867). */
   private async requestBuffer(method: string, path: string): Promise<Buffer> {
-    const doRequest = async (token: string): Promise<Response> => {
-      const url = `${this.baseUrl}${path}`;
-      return fetch(url, {
-        method,
-        headers: { 'X-Access-Token': token },
-      });
-    };
-
-    let res = await doRequest(this.accessToken);
-
-    if (res.status === 401) {
-      const refreshed = await this.tryRefresh();
-      if (refreshed) {
-        res = await doRequest(this.accessToken);
-      }
-    }
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Download failed (${res.status}): ${text}`);
-    }
-
-    const ab = await res.arrayBuffer();
-    return Buffer.from(ab);
+    const { httpMethod } = normalizeMethod(method);
+    return runWithGetRetry<Buffer>({
+      httpMethod,
+      path,
+      doFetch: () => this.fetchWithRefresh(httpMethod, path),
+      // Explicit `res: Response` — see request() above. (#3068)
+      onOk: async (res: Response) => Buffer.from(await res.arrayBuffer()),
+      onError: async (res: Response) => {
+        const text = await res.text();
+        const { code, retryable } = classifyStatus(res.status);
+        return new McpError({
+          code,
+          message: `Download failed (${res.status}): ${text}`,
+          status: res.status,
+          retryable,
+        });
+      },
+    });
   }
 
   private async tryRefresh(): Promise<boolean> {
@@ -601,11 +599,94 @@ export class UserApiClient {
     return this.request('GET', '/auth/me');
   }
 
+  // --- Streaming helpers (#862) ---
+
+  /** Expose the API base URL so the streaming module can talk to the same host the client is authed against. */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /** Expose the current access token. Fresh each call; streaming module invokes this when opening the stream. */
+  getAccessToken(): string {
+    return this.accessToken;
+  }
+
+  /**
+   * Refresh the access token iff its remaining lifetime is below the
+   * threshold. Used by the CLI BEFORE opening an SSE stream so a
+   * mid-stream 401 doesn't surface as `auth_expired`. Returns:
+   *   - `true` if the token is fresh (already valid or refreshed ok)
+   *   - `false` if refresh was attempted and failed
+   *
+   * If the token's `exp` claim can't be decoded, skips pre-flight and
+   * returns `true` (the server's 401 path is the backstop).
+   */
+  async refreshIfExpiringSoon(thresholdMs = 10 * 60 * 1000): Promise<boolean> {
+    const expMs = this.decodeTokenExpMs();
+    if (expMs === null) return true; // Opaque token — let the server decide.
+    if (expMs - Date.now() > thresholdMs) return true; // Still valid for long enough.
+    return this.tryRefresh();
+  }
+
+  /** Decode the JWT payload's `exp` claim (ms). Returns `null` if the token isn't a decodable JWT. */
+  private decodeTokenExpMs(): number | null {
+    const parts = this.accessToken.split('.');
+    if (parts.length !== 3) return null;
+    try {
+      const b64url = parts[1] ?? '';
+      // Base64url → base64 and pad.
+      const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+      const decoded = Buffer.from(padded, 'base64').toString('utf8');
+      const payload = JSON.parse(decoded) as { exp?: number };
+      if (typeof payload.exp !== 'number') return null;
+      return payload.exp * 1000;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Blocking resume — `POST /intents/:id/resume` without
+   * `Accept: text/event-stream`. Returns a typed outcome for EVERY
+   * response (happy-path AND precheck 4xx), so the CLI can render
+   * blocking + streaming paths through the same renderer. Throws only
+   * on raw transport failures (fetch rejection, JSON parse).
+   */
+  async resumeIntent(
+    intentId: string,
+    clientIdempotencyKey: string,
+  ): Promise<ResumeBlockingOutcome> {
+    const doRequest = async (token: string): Promise<Response> => {
+      const url = `${this.baseUrl}/intents/${encodeURIComponent(intentId)}/resume`;
+      const headers: Record<string, string> = {
+        'X-Access-Token': token,
+        'X-Idempotency-Key': clientIdempotencyKey,
+        'Content-Type': 'application/json',
+      };
+      return fetch(url, { method: 'POST', headers, body: '{}' });
+    };
+
+    let res = await doRequest(this.accessToken);
+    if (res.status === 401) {
+      const refreshed = await this.tryRefresh();
+      if (refreshed) res = await doRequest(this.accessToken);
+    }
+
+    let body: Record<string, unknown> = {};
+    try {
+      body = (await res.json()) as Record<string, unknown>;
+    } catch {
+      // No body or non-JSON — leave body empty.
+    }
+    return mapResumeJsonToOutcome(res.status, body);
+  }
+
   async logout(): Promise<void> {
     try {
       await this.request('POST', '/auth/logout');
     } catch {
-      // Best-effort -- clear local tokens regardless
+      // Best-effort — clear local tokens regardless
     }
     clearAuth();
   }
@@ -625,6 +706,10 @@ export class UserApiClient {
 
   // --- Source preview ---
 
+  /**
+   * #993 — Extract preview metadata from a URL without generating.
+   * Used by the CLI to show title + char count before spending a credit.
+   */
   async extractUrlPreview(url: string): Promise<{
     title: string;
     author: string | null;
@@ -635,6 +720,10 @@ export class UserApiClient {
     return this.request('POST', '/source/extract-preview', { url });
   }
 
+  /**
+   * #1001 — Extract YouTube transcript preview (title, channel, char count)
+   * without triggering generation.
+   */
   async extractYoutubePreview(url: string): Promise<{
     title: string;
     channelName: string | null;
@@ -645,6 +734,24 @@ export class UserApiClient {
     return this.request('POST', '/source/extract-youtube', { url });
   }
 
+  /**
+   * #2334 — Extract text from a Twitter/X post URL (thread text, author info).
+   */
+  async extractTwitterPreview(url: string): Promise<{
+    text: string;
+    author: string | null;
+    authorHandle: string | null;
+    charCount: number;
+    truncated: boolean;
+  }> {
+    return this.request('POST', '/source/extract-twitter', { url });
+  }
+
+  /**
+   * #999 — Upload a PDF file and extract text for source-based generation.
+   * Uses multipart/form-data instead of JSON. Mirrors the 401 refresh-and-retry
+   * pattern from request() since we can't reuse it (it forces JSON Content-Type).
+   */
   async uploadPdf(buffer: Buffer): Promise<{
     text: string;
     pageCount: number;
@@ -663,19 +770,28 @@ export class UserApiClient {
       });
     };
 
-    let res = await doUpload(this.accessToken);
-
-    if (res.status === 401) {
-      const refreshed = await this.tryRefresh();
-      if (refreshed) {
-        res = await doUpload(this.accessToken);
+    const path = '/source/upload-pdf';
+    let res: Response;
+    try {
+      res = await doUpload(this.accessToken);
+      // Auto-refresh on 401 (mirrors request() behavior)
+      if (res.status === 401) {
+        const refreshed = await this.tryRefresh();
+        if (refreshed) res = await doUpload(this.accessToken);
       }
+    } catch (cause) {
+      // Transport rejection — unified McpError + telemetry (#2867). POST
+      // multipart mutation → no retry.
+      const err = networkErrorToMcpError(cause);
+      emitMcpFailure({ method: 'POST', path, code: err.code, status: err.status, retryable: err.retryable });
+      throw err;
     }
 
     if (!res.ok) {
       const data = await res.json().catch(() => null) as Record<string, unknown> | null;
-      const msg = (data && typeof data['error'] === 'string') ? data['error'] as string : `HTTP ${res.status}`;
-      throw new Error(msg);
+      const err = this.buildHttpError(res, data);
+      emitMcpFailure({ method: 'POST', path, code: err.code, status: err.status, retryable: err.retryable });
+      throw err;
     }
 
     return res.json() as Promise<{ text: string; pageCount: number; charCount: number; truncated: boolean }>;
@@ -687,23 +803,38 @@ export class UserApiClient {
     intentText?: string,
     tonePreference?: string,
     source?: { type: string; text?: string; url?: string; title?: string; author?: string },
+    style?: string,
+    styleNotes?: Record<string, unknown>,
   ): Promise<GenerateResult> {
     const body: Record<string, unknown> = {};
     if (intentText) body['intentText'] = intentText;
     if (tonePreference) body['tonePreference'] = tonePreference;
     if (source) body['source'] = source;
+    // #3062 — Optional rhetorical-style steering (preset and/or free-form).
+    if (style) body['style'] = style;
+    if (styleNotes) body['styleNotes'] = styleNotes;
     return this.request('POST', '/affirmations/generate', body);
   }
 
+  /**
+   * Same as `createAndGenerate` but also returns the rate-limit headers
+   * from the 2xx response so `nl create` can print the user's remaining
+   * quota. Added for #855.
+   */
   async createAndGenerateWithMeta(
     intentText?: string,
     tonePreference?: string,
     source?: { type: string; text?: string; url?: string; title?: string; author?: string },
+    style?: string,
+    styleNotes?: Record<string, unknown>,
   ): Promise<{ data: GenerateResult; rateLimit?: RateLimitMeta }> {
     const body: Record<string, unknown> = {};
     if (intentText) body['intentText'] = intentText;
     if (tonePreference) body['tonePreference'] = tonePreference;
     if (source) body['source'] = source;
+    // #3062 — Optional rhetorical-style steering (preset and/or free-form).
+    if (style) body['style'] = style;
+    if (styleNotes) body['styleNotes'] = styleNotes;
     return this.requestWithRateMeta<GenerateResult>('POST', '/affirmations/generate', body);
   }
 
@@ -731,6 +862,18 @@ export class UserApiClient {
 
   async getRenderJob(jobId: string): Promise<{ renderJob: RenderJob }> {
     return this.request('GET', `/render-jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  /** Get an affirmation set by id. Returns the owning intent id for
+   *  the perf harness's `nl admin perf render --set <id>` resolver to
+   *  accept either id type transparently (#806). */
+  async getAffirmationSet(setId: string): Promise<{ affirmationSet: { id: string; intentId: string } }> {
+    return this.request('GET', `/affirmation-sets/${encodeURIComponent(setId)}`);
+  }
+
+  /** Expose stored auth env for CLI-level env-mismatch guards (#806). */
+  getEnv(): ApiEnv {
+    return this.env;
   }
 
   async createRenderJob(renderConfigId: string): Promise<{ renderJob: RenderJob }> {
@@ -775,37 +918,23 @@ export class UserApiClient {
     return this.request('PATCH', '/auth/me', data);
   }
 
-  // --- Context Settings ---
-
-  async getContextSettings(): Promise<{ settings: ContextSettings[] }> {
-    return this.request('GET', '/context-settings');
-  }
-
-  async updateContextSettings(
-    context: string,
-    data: Partial<Omit<ContextSettings, 'sessionContext'>>,
-  ): Promise<{ settings: ContextSettings }> {
-    return this.request('PATCH', `/context-settings/${encodeURIComponent(context)}`, data);
-  }
-
-  async deleteContextSettings(context: string): Promise<void> {
-    return this.requestVoid('DELETE', `/context-settings/${encodeURIComponent(context)}`);
-  }
-
-  // --- Username ---
+  // --- Username (#2138) ---
 
   /** Set or update the authenticated user's username via PATCH /auth/me. */
   async setUsername(username: string): Promise<{ user: UserDto }> {
     return this.request('PATCH', '/auth/me', { username });
   }
 
-  /** Check username availability. */
+  /**
+   * Check username availability. This is a public endpoint (no auth required)
+   * but we route through the client for consistency and base URL resolution.
+   */
   async checkUsername(username: string): Promise<{ available: boolean; suggestion?: string; error?: string }> {
     const qs = encodeURIComponent(username);
     return this.request('GET', `/auth/username/available?username=${qs}`);
   }
 
-  // --- Affirmation feedback & toggle ---
+  // --- Affirmation feedback & toggle (#2209) ---
 
   /** Set feedback (like/dislike/clear) on a single affirmation. */
   async feedbackAffirmation(
@@ -827,7 +956,31 @@ export class UserApiClient {
     });
   }
 
-  // --- Affirmation management ---
+  // --- Context Settings ---
+
+  async getContextSettings(): Promise<{ settings: ContextSettings[] }> {
+    return this.request('GET', '/context-settings');
+  }
+
+  async updateContextSettings(
+    context: string,
+    data: Partial<Omit<ContextSettings, 'sessionContext'>>,
+  ): Promise<{ settings: ContextSettings }> {
+    return this.request('PATCH', `/context-settings/${encodeURIComponent(context)}`, data);
+  }
+
+  async deleteContextSettings(context: string): Promise<void> {
+    return this.requestVoid('DELETE', `/context-settings/${encodeURIComponent(context)}`);
+  }
+
+  // --- Wizard Defaults ---
+
+  async getWizardDefaults(intentId?: string): Promise<WizardDefaults> {
+    const qs = intentId ? `?intentId=${encodeURIComponent(intentId)}` : '';
+    return this.request('GET', `/wizard/defaults${qs}`);
+  }
+
+  // --- Affirmation management (#2337) ---
 
   /** Generate more affirmations for an existing set. Costs 1 credit. */
   async generateMore(setId: string, count?: number): Promise<{ affirmationSet: unknown; added: number }> {
@@ -852,27 +1005,25 @@ export class UserApiClient {
     return this.request('PUT', `/intents/${encodeURIComponent(intentId)}/affirmations/sync`, input);
   }
 
-  // --- Wizard Defaults ---
+  // --- Manual intent creation (with affirmations) ---
 
-  async getWizardDefaults(intentId?: string): Promise<WizardDefaults> {
-    const qs = intentId ? `?intentId=${encodeURIComponent(intentId)}` : '';
-    return this.request('GET', `/wizard/defaults${qs}`);
-  }
-
-  // --- Source extraction ---
-
-  /** Extract text from a Twitter/X post URL. */
-  async extractTwitterPreview(url: string): Promise<{
-    text: string;
-    author: string | null;
-    authorHandle: string | null;
-    charCount: number;
-    truncated: boolean;
+  async createManualIntent(input: {
+    title: string;
+    rawText: string;
+    tonePreference?: string | null;
+    sessionContext?: string | undefined;
+    affirmations: Array<{ text: string }>;
+  }): Promise<{
+    intent: { id: string; title: string; emoji: string | null; rawText: string; sessionContext: string };
+    affirmationSet: {
+      id: string;
+      affirmations: Array<{ id: string; text: string; tone: string; isEnabled: boolean }>;
+    };
   }> {
-    return this.request('POST', '/source/extract-twitter', { url });
+    return this.request('POST', '/intents/manual', input);
   }
 
-  // --- Catalog ---
+  // --- Catalog (#2336) ---
 
   /** Browse catalog sets. Public endpoint (auth sent but not required). */
   async catalogBrowse(params?: {
@@ -888,12 +1039,12 @@ export class UserApiClient {
     return this.request('GET', `/catalog${query ? `?${query}` : ''}`);
   }
 
-  /** View a specific catalog item by slug. */
+  /** View a specific catalog item by slug. Public endpoint. */
   async catalogView(slug: string): Promise<Record<string, unknown>> {
     return this.request('GET', `/catalog/${encodeURIComponent(slug)}`);
   }
 
-  /** Copy a catalog set to the user's library. Requires auth. */
+  /** Copy a catalog set to the user's library. Requires auth (rate-limited). */
   async catalogCopy(slug: string): Promise<{
     intent: { id: string; title: string; emoji: string | null };
     affirmationSet: { id: string; affirmations: Array<{ id: string; text: string; tone: string; isEnabled: boolean }> };
@@ -901,7 +1052,7 @@ export class UserApiClient {
     return this.request('POST', `/catalog/${encodeURIComponent(slug)}/copy`);
   }
 
-  // --- Playback tracking ---
+  // --- Playback tracking (#2338) ---
 
   /** Start a playback session. Creates a PlaybackHistory record. */
   async startPlayback(intentId: string, renderJobId?: string): Promise<{ id: string }> {
@@ -919,24 +1070,6 @@ export class UserApiClient {
     const body: Record<string, unknown> = { durationSeconds };
     if (completed !== undefined) body['completed'] = completed;
     return this.request('PATCH', `/playback/${encodeURIComponent(playbackId)}`, body);
-  }
-
-  // --- Manual intent creation (with affirmations) ---
-
-  async createManualIntent(input: {
-    title: string;
-    rawText: string;
-    tonePreference?: string | null;
-    sessionContext?: string | undefined;
-    affirmations: Array<{ text: string }>;
-  }): Promise<{
-    intent: { id: string; title: string; emoji: string | null; rawText: string; sessionContext: string };
-    affirmationSet: {
-      id: string;
-      affirmations: Array<{ id: string; text: string; tone: string; isEnabled: boolean }>;
-    };
-  }> {
-    return this.request('POST', '/intents/manual', input);
   }
 
 }

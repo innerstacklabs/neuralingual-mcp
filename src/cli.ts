@@ -2,16 +2,31 @@
 import { Command } from 'commander';
 import { spawn, spawnSync, exec } from 'child_process';
 import { createServer } from 'http';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { writeFileSync, readFileSync, unlinkSync, existsSync, mkdirSync } from 'fs';
 import { createInterface } from 'readline';
 import { tmpdir, homedir } from 'os';
 import { join } from 'path';
+import {
+  openGenerationStream,
+  type GenerationStreamHandlers,
+  type ResumeBlockingOutcome,
+  type StreamError,
+} from './streaming/generation-stream.js';
+import { StreamRenderer } from './streaming/render.js';
+import type { StreamingProtocolEvent } from './streaming/protocol-types.js';
 import { UserApiClient } from './user-client.js';
+import { installEnvTelemetrySink } from './mcp-telemetry.js';
 import { loadAuth, clearAuth } from './auth-store.js';
-import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderConfigInput, RenderStatus, SessionContext, TonePreference, Voice } from './types.js';
+import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderConfigInput, RenderStatus, SessionContext, TonePreference } from './types.js';
 import { API_BASE_URLS } from './types.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
+import {
+  renderFrameworkMarkdown,
+  extractFrameworkSchemaVersion,
+  extractFrameworkTakeaway,
+  hasFramework,
+} from './framework-render.js';
 import { z } from 'zod';
 import type { SetFileData } from './set-file.js';
 
@@ -22,7 +37,7 @@ const program = new Command();
 
 program
   .name('neuralingual')
-  .description('Neuralingual CLI — AI-powered affirmation practice sets')
+  .description('Neuralingual CLI — playlist management (admin + user commands)')
   .version('0.1.0')
   .option('--env <env>', 'API environment: dev or production (default: production)', 'production');
 
@@ -37,6 +52,15 @@ function printResult(data: unknown, isError = false): void {
   }
 }
 
+/** Format a byte count as a human-readable string (e.g. "1.23 GB"). */
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+}
+
 /** Render a simple text table with left-aligned columns. */
 function printTable(rows: string[][], headers: string[]): void {
   const allRows = [headers, ...rows];
@@ -48,6 +72,23 @@ function printTable(rows: string[][], headers: string[]): void {
   for (const row of rows) {
     console.log(line(row));
   }
+}
+
+/**
+ * Read all of stdin and return as a string.
+ *
+ * Defined here (outside the @public-strip block) so the user-facing
+ * `create --source-text -` handler can call it in the public CLI — the admin
+ * commands inside the strip block use it too. Keeping it before the strip marker
+ * means it survives admin-code stripping during the public sync (#3068).
+ */
+function readStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    process.stdin.on('error', reject);
+  });
 }
 
 
@@ -107,7 +148,7 @@ async function resolveIntentId(client: UserApiClient, shortId: string): Promise<
     process.exit(1);
   }
 
-  console.error(`Error: no practice set found matching "${shortId}"`);
+  console.error(`Error: no playlist found matching "${shortId}"`);
   process.exit(1);
 }
 
@@ -500,6 +541,7 @@ program
       const { user } = await client.getMe();
       const lines = [
         `User:    ${user.displayName ?? '(no name)'}`,
+        `Username:${user.username ? ` @${user.username}` : ' (not set)'}`,
         `Email:   ${user.email ?? '(none)'}`,
         `ID:      ${user.id}`,
         `Tier:    ${user.subscriptionTier ?? 'free'}`,
@@ -513,11 +555,53 @@ program
     }
   });
 
+// ─── username (#2138) ──────────────────────────────────────────────────────
+
+const usernameCmd = program.command('username').description('Check or set your username');
+
+usernameCmd
+  .command('check <name>')
+  .description('Check if a username is available')
+  .action(async (name: string) => {
+    const client = getUserClient();
+    try {
+      const result = await client.checkUsername(name);
+      if (result.available) {
+        console.log(`Username "${name}" is available.`);
+      } else {
+        console.log(`Username "${name}" is not available.`);
+        if (result.suggestion) {
+          console.log(`Suggestion: ${result.suggestion}`);
+        }
+        if (result.error) {
+          console.log(`Reason: ${result.error}`);
+        }
+      }
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+usernameCmd
+  .command('set <name>')
+  .description('Set or update your username')
+  .action(async (name: string) => {
+    const client = getUserClient();
+    try {
+      const { user } = await client.setUsername(name);
+      console.log(`Username set to @${user.username ?? name}`);
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
 // ─── library ────────────────────────────────────────────────────────────────
 
 program
   .command('library')
-  .description('List your practice sets')
+  .description('List your playlists')
   .option('--context <ctx>', `Filter by context: ${VALID_CONTEXTS.join(', ')}`)
   .option('--status <status>', 'Filter by render status: rendered, pending, failed')
   .option('--sort <order>', 'Sort order: newest, oldest, title (default: newest)', 'newest')
@@ -581,7 +665,7 @@ program
       }
 
       if (filtered.length === 0) {
-        console.log('No matching practice sets found.');
+        console.log('No matching playlists found.');
         return;
       }
 
@@ -610,14 +694,14 @@ program
 
 program
   .command('info <intent-id>')
-  .description('Show detailed info for a practice set')
+  .description('Show detailed info for a playlist')
   .action(async (intentId: string) => {
     const client = getUserClient();
     try {
       const resolvedId = await resolveIntentId(client, intentId);
       const { intent } = await client.getIntent(resolvedId);
       if (!intent) {
-        console.error('Error: practice set not found');
+        console.error('Error: playlist not found');
         process.exit(1);
       }
 
@@ -627,6 +711,17 @@ program
       console.log(`Context: ${intent.sessionContext}`);
       if (intent.tonePreference) console.log(`Tone: ${intent.tonePreference}`);
       console.log(`Intent: ${intent.rawText}`);
+
+      // Source metadata (#930, #993)
+      if (intent.sourceType) {
+        console.log();
+        console.log('Source:');
+        if (intent.sourceTitle) console.log(`  Title: ${intent.sourceTitle}`);
+        if (intent.sourceAuthor) console.log(`  Author: ${intent.sourceAuthor}`);
+        console.log(`  Type: ${intent.sourceType}`);
+        if (intent.sourceUrl) console.log(`  URL: ${intent.sourceUrl}`);
+        if (intent.sourceSummary) console.log(`  Summary: ${intent.sourceSummary}`);
+      }
       console.log();
 
       // Affirmations
@@ -685,9 +780,47 @@ program
         }
       }
 
+      // Framework (#749) — one-liner status, full render via `nl guide <id>`.
+      const framework = latestSet?.framework ?? null;
+      if (hasFramework(framework)) {
+        const schemaV = extractFrameworkSchemaVersion(framework);
+        const takeaway = extractFrameworkTakeaway(framework);
+        const schemaLabel = schemaV !== null ? `schema v${schemaV}` : 'schema unversioned';
+        if (takeaway) {
+          console.log(`Framework: yes (${schemaLabel}) — "${takeaway}"`);
+        } else {
+          console.log(`Framework: yes (${schemaLabel})`);
+        }
+        console.log(`  Full render: nl guide ${intent.id.slice(0, 8)}`);
+      } else {
+        console.log('Framework: none (legacy or second-person set)');
+      }
+
       // Timestamps
       console.log(`Created: ${new Date(intent.createdAt).toLocaleString()}`);
       console.log(`Updated: ${new Date(intent.updatedAt).toLocaleString()}`);
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+// ─── guide ──────────────────────────────────────────────────────────────────
+
+program
+  .command('guide <intent-id>')
+  .description('Print the framework (methodology, principles, sources, groupings, practical application, takeaway) as markdown. Returns a clean fallback for legacy sets that have no framework.')
+  .action(async (intentId: string) => {
+    const client = getUserClient();
+    try {
+      const resolvedId = await resolveIntentId(client, intentId);
+      const { intent } = await client.getIntent(resolvedId);
+      if (!intent) {
+        console.error('Error: playlist not found');
+        process.exit(1);
+      }
+      const framework = intent.affirmationSets[0]?.framework ?? null;
+      process.stdout.write(renderFrameworkMarkdown(framework));
     } catch (err: unknown) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -698,7 +831,7 @@ program
 
 program
   .command('rename <intent-id>')
-  .description('Rename a practice set')
+  .description('Rename a playlist')
   .option('--title <title>', 'New title')
   .option('--emoji <emoji>', 'New emoji')
   .action(async (intentId: string, opts: { title?: string; emoji?: string }) => {
@@ -725,7 +858,7 @@ program
 
 program
   .command('rerender <intent-id>')
-  .description('Re-render a practice set with its current config')
+  .description('Re-render a playlist with its current config')
   .option('--wait', 'Wait for the render to complete')
   .action(async (intentId: string, opts: { wait?: boolean }) => {
     const client = getUserClient();
@@ -735,7 +868,7 @@ program
       // Check if render config exists
       const { intent } = await client.getIntent(resolvedId);
       if (!intent) {
-        console.error('Error: practice set not found');
+        console.error('Error: playlist not found');
         process.exit(1);
       }
       if (!intent.renderConfigs || intent.renderConfigs.length === 0) {
@@ -806,72 +939,548 @@ program
 
 program
   .command('create [text]')
-  .description('Create a new practice set from intent text or source material')
+  .description('Create a new playlist. Provide intent text, source material (--source-text, --source-url, --source-pdf, or --source-youtube), or both.')
   .option('--tone <tone>', 'Tone preference: grounded, open, or mystical')
-  .option('--source-text <text>', 'Source text to generate from')
-  .option('--source-url <url>', 'Source URL to generate from')
-  .option('--source-pdf <path>', 'Path to a PDF document to generate from')
-  .option('--source-youtube <url>', 'YouTube video URL to generate from')
-  .action(async (text: string | undefined, opts: { tone?: string; sourceText?: string; sourceUrl?: string; sourcePdf?: string; sourceYoutube?: string }) => {
+  .option('--source-text <text>', 'Source material text (book excerpt, article, etc.). Use "-" to read from stdin.')
+  .option('--source-url <url>', 'URL of a web article. Server extracts the text automatically.')
+  .option('--source-pdf <path>', 'Path to a PDF file. Server extracts text automatically.')
+  .option('--source-youtube <url>', 'YouTube video URL. Extracts the transcript (captions) automatically.')
+  .option('--source-title <title>', 'Title of the source material')
+  .option('--source-author <author>', 'Author of the source material')
+  .option('--no-stream', 'Use the blocking endpoint (legacy behavior)')
+  .option('--stream-text', 'Render the framework text progressively (alias: --verbose)')
+  .option('--verbose', 'Alias for --stream-text')
+  .option('--idempotency-key <uuid>', 'Client idempotency key (auto-generated if omitted)')
+  .action(async (text: string | undefined, opts: {
+    tone?: string;
+    sourceText?: string;
+    sourceUrl?: string;
+    sourcePdf?: string;
+    sourceYoutube?: string;
+    sourceTitle?: string;
+    sourceAuthor?: string;
+    stream: boolean;
+    streamText?: boolean;
+    verbose?: boolean;
+    idempotencyKey?: string;
+  }) => {
     if (opts.tone && !VALID_TONES.includes(opts.tone)) {
       console.error(`Error: --tone must be one of: ${VALID_TONES.join(', ')}`);
       process.exit(1);
     }
 
-    if (!text && !opts.sourceText && !opts.sourceUrl && !opts.sourcePdf && !opts.sourceYoutube) {
-      console.error('Error: provide intent text or a source (--source-text, --source-url, --source-pdf, --source-youtube)');
-      process.exit(1);
-    }
-
-    // Source inputs are mutually exclusive
+    // #993/#999/#1001 — source options are mutually exclusive
     const sourceFlags = [opts.sourceText, opts.sourceUrl, opts.sourcePdf, opts.sourceYoutube].filter(Boolean);
     if (sourceFlags.length > 1) {
       console.error('Error: --source-text, --source-url, --source-pdf, and --source-youtube are mutually exclusive. Use one at a time.');
       process.exit(1);
     }
 
-    const client = getUserClient();
-    console.error('Creating practice set (this may take 10-30 seconds)...');
-
-    try {
-      let source: { type: string; text?: string; url?: string } | undefined;
-      if (opts.sourceText) {
-        source = { type: 'text', text: opts.sourceText };
-      } else if (opts.sourceUrl) {
-        source = { type: 'url', url: opts.sourceUrl };
-      } else if (opts.sourcePdf) {
-        // Read PDF and pass as base64 text (server-side extraction via uploadPdf)
-        const { readFileSync, existsSync: fsExistsSync } = await import('node:fs');
-        if (!fsExistsSync(opts.sourcePdf)) {
-          console.error(`Error: file not found: ${opts.sourcePdf}`);
-          process.exit(1);
-        }
-        const buffer = readFileSync(opts.sourcePdf);
-        if (buffer.length > 10 * 1024 * 1024) {
-          console.error('Error: PDF file is too large. Maximum size is 10 MB.');
-          process.exit(1);
-        }
-        const preview = await client.uploadPdf(buffer);
-        source = { type: 'pdf', text: preview.text };
-      } else if (opts.sourceYoutube) {
-        source = { type: 'youtube', url: opts.sourceYoutube };
+    // Read source text from stdin if "-" is specified
+    let sourceText = opts.sourceText;
+    if (sourceText === '-') {
+      if (process.stdin.isTTY) {
+        console.error('Error: --source-text - requires piped input (e.g. cat file.txt | nl create --source-text -)');
+        process.exit(1);
       }
+      sourceText = await readStdin();
+    }
 
-      const result = await client.createAndGenerate(text, opts.tone, source);
-      const { intent, affirmationSet } = result;
-      console.log(`\nCreated: ${intent.emoji ?? ''} ${intent.title}`);
-      console.log(`Intent ID: ${intent.id}`);
-      console.log(`Context: ${intent.sessionContext}`);
-      console.log(`\nAffirmations (${affirmationSet.affirmations.length}):`);
-      for (const a of affirmationSet.affirmations) {
-        console.log(`  ${a.isEnabled ? '[x]' : '[ ]'} ${a.text}`);
-      }
-      console.log(`\nNext: configure and render with \`nl render ${intent.id}\``);
-    } catch (err: unknown) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    // Validate: at least one of text, sourceText, sourceUrl, sourcePdf, or sourceYoutube required
+    if (!text && !sourceText && !opts.sourceUrl && !opts.sourcePdf && !opts.sourceYoutube) {
+      console.error('Error: provide intent text, --source-text, --source-url, --source-pdf, --source-youtube, or a combination.');
+      console.error('  Usage: nl create "my intent"');
+      console.error('         nl create --source-text "source material..."');
+      console.error('         nl create --source-url "https://example.com/article"');
+      console.error('         nl create --source-pdf chapter.pdf');
+      console.error('         nl create --source-youtube "https://youtube.com/watch?v=..."');
+      console.error('         cat file.txt | nl create --source-text -');
       process.exit(1);
     }
+
+    // Validate source text length
+    if (sourceText && sourceText.length > 16_000) {
+      console.error(`Error: source text is too long (${sourceText.length.toLocaleString()} chars). Maximum is 16,000 characters.`);
+      process.exit(1);
+    }
+
+    // Validate URL format
+    if (opts.sourceUrl) {
+      try {
+        const url = new URL(opts.sourceUrl);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+          console.error('Error: --source-url must be an HTTP or HTTPS URL.');
+          process.exit(1);
+        }
+      } catch {
+        console.error('Error: --source-url is not a valid URL.');
+        process.exit(1);
+      }
+    }
+
+    // #1001 — Validate YouTube URL format (must be a video URL, not channel/playlist)
+    if (opts.sourceYoutube) {
+      try {
+        const url = new URL(opts.sourceYoutube);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+          console.error('Error: --source-youtube must be an HTTP or HTTPS URL.');
+          process.exit(1);
+        }
+        const validHosts = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be'];
+        if (!validHosts.includes(url.hostname)) {
+          console.error('Error: --source-youtube must be a YouTube URL (youtube.com or youtu.be).');
+          process.exit(1);
+        }
+        // Check that the URL points to a video (watch?v=, youtu.be/ID, shorts/ID)
+        const videoIdPattern = /(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|watch\?[^#]*v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+        if (!videoIdPattern.test(opts.sourceYoutube)) {
+          console.error('Error: --source-youtube must be a YouTube video URL (e.g. youtube.com/watch?v=..., youtu.be/..., or youtube.com/shorts/...).');
+          console.error('Channel, playlist, and other YouTube URLs are not supported.');
+          process.exit(1);
+        }
+      } catch {
+        console.error('Error: --source-youtube is not a valid URL.');
+        process.exit(1);
+      }
+    }
+
+    // #999 — Validate and upload PDF file
+    let pdfExtractedText: string | undefined;
+    if (opts.sourcePdf) {
+      const { readFileSync, statSync: fsStat, existsSync: fsExists } = await import('node:fs');
+      const pdfPath = opts.sourcePdf;
+      if (!fsExists(pdfPath)) {
+        console.error(`Error: file not found: ${pdfPath}`);
+        process.exit(1);
+      }
+      const stats = fsStat(pdfPath);
+      if (stats.size > 10 * 1024 * 1024) {
+        const sizeMB = (stats.size / (1024 * 1024)).toFixed(1);
+        console.error(`Error: PDF file is too large (${sizeMB} MB). Maximum is 10 MB.`);
+        process.exit(1);
+      }
+
+      const pdfBuffer = readFileSync(pdfPath);
+      const pdfClient = getUserClient();
+      try {
+        console.log(`\nExtracting text from PDF...`);
+        const preview = await pdfClient.uploadPdf(pdfBuffer);
+        console.log(`  Pages:  ${preview.pageCount}`);
+        console.log(`  Length: ${preview.charCount.toLocaleString()} chars`);
+        if (preview.truncated) {
+          console.log(`  Text was truncated to 16,000 characters.`);
+        }
+        console.log('');
+        pdfExtractedText = preview.text;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`Error: could not extract text from PDF — ${msg}`);
+        process.exit(1);
+      }
+    }
+
+    // Build source object
+    const source: { type: string; text?: string; url?: string; title?: string; author?: string } | undefined =
+      sourceText
+        ? {
+            type: 'text' as const,
+            text: sourceText,
+            ...(opts.sourceTitle ? { title: opts.sourceTitle } : {}),
+            ...(opts.sourceAuthor ? { author: opts.sourceAuthor } : {}),
+          }
+        : opts.sourceUrl
+          ? {
+              type: 'url' as const,
+              url: opts.sourceUrl,
+              ...(opts.sourceTitle ? { title: opts.sourceTitle } : {}),
+              ...(opts.sourceAuthor ? { author: opts.sourceAuthor } : {}),
+            }
+          : opts.sourceYoutube
+            ? {
+                type: 'youtube' as const,
+                url: opts.sourceYoutube,
+                ...(opts.sourceTitle ? { title: opts.sourceTitle } : {}),
+                ...(opts.sourceAuthor ? { author: opts.sourceAuthor } : {}),
+              }
+            : pdfExtractedText
+              ? {
+                  type: 'pdf' as const,
+                  text: pdfExtractedText,
+                  ...(opts.sourceTitle ? { title: opts.sourceTitle } : {}),
+                  ...(opts.sourceAuthor ? { author: opts.sourceAuthor } : {}),
+                }
+              : undefined;
+
+    const client = getUserClient();
+
+    // #993 — Show extraction preview for URL sources before generating.
+    if (source?.type === 'url' && source.url) {
+      try {
+        console.log(`\nFetching article from URL...`);
+        const preview = await client.extractUrlPreview(source.url);
+        console.log(`  Title:  ${preview.title || '(untitled)'}`);
+        if (preview.author) console.log(`  Author: ${preview.author}`);
+        console.log(`  Length: ${preview.charCount.toLocaleString()} chars`);
+        if (preview.truncated) {
+          console.log(`  Article was truncated to 16,000 characters.`);
+        }
+        console.log('');
+      } catch (err) {
+        // Preview failure is not fatal — the generate endpoint will also
+        // validate the URL. Surface the error and let the user decide.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`Warning: could not preview URL — ${msg}`);
+        console.error('Proceeding with generation...\n');
+      }
+    }
+
+    // #1001 — Show extraction preview for YouTube sources before generating.
+    if (source?.type === 'youtube' && source.url) {
+      try {
+        console.log(`\nExtracting transcript from YouTube...`);
+        const preview = await client.extractYoutubePreview(source.url);
+        console.log(`  Title:   ${preview.title || '(untitled)'}`);
+        if (preview.channelName) console.log(`  Channel: ${preview.channelName}`);
+        console.log(`  Length:  ${preview.charCount.toLocaleString()} chars`);
+        if (preview.truncated) {
+          console.log(`  Transcript was truncated to 16,000 characters.`);
+        }
+        console.log('');
+      } catch (err) {
+        // Preview failure is not fatal — the generate endpoint will also
+        // extract the transcript. Surface the error and let the user decide.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`Warning: could not preview YouTube transcript — ${msg}`);
+        console.error('Proceeding with generation...\n');
+      }
+    }
+
+    // Commander's --no-stream flag sets opts.stream = false; default is true.
+    if (opts.stream === false) {
+      await runBlockingCreate(client, text, opts.tone, source);
+      return;
+    }
+
+    const code = await runStreamingCreate(client, text, {
+      ...opts,
+      ...(source ? { source } : {}),
+    });
+    if (code !== 0) process.exit(code);
   });
+
+/**
+ * Optional dev-observability telemetry sink for the StreamRenderer.
+ * When `NL_STREAM_TELEMETRY=1` is set, the renderer emits
+ * `cli.generation.phase.*` lines to stderr (#862 acceptance:
+ * "CLI emits its own cli.generation.phase.* events for dev observability").
+ * Returns `undefined` when the env var isn't set so the CLI can spread
+ * `...streamTelemetrySink()` without wrapping each call.
+ */
+function streamTelemetrySink():
+  | { telemetry: (event: string, details: Record<string, unknown>) => void }
+  | Record<string, never> {
+  if (process.env['NL_STREAM_TELEMETRY'] !== '1') return {};
+  return {
+    telemetry: (event: string, details: Record<string, unknown>): void => {
+      process.stderr.write(`[telemetry] ${event} ${JSON.stringify(details)}\n`);
+    },
+  };
+}
+
+/**
+ * Blocking-create path — same behavior as before streaming shipped. Kept
+ * in its own function so `--no-stream` and the 404-fallback path can
+ * both reach it.
+ */
+async function runBlockingCreate(
+  client: UserApiClient,
+  text: string | undefined,
+  tone: string | undefined,
+  source?: { type: string; text?: string; url?: string; title?: string; author?: string },
+): Promise<void> {
+  console.error('Creating playlist (this may take 10-30 seconds)...');
+  try {
+    const result = await runCreateWithRateLimitRetry(() =>
+      client.createAndGenerateWithMeta(text, tone, source),
+    );
+    const { intent, affirmationSet } = result.data;
+    console.log(`\nCreated: ${intent.emoji ?? ''} ${intent.title}`);
+    console.log(`Intent ID: ${intent.id}`);
+    console.log(`Context: ${intent.sessionContext}`);
+    console.log(`\nAffirmations (${affirmationSet.affirmations.length}):`);
+    for (const a of affirmationSet.affirmations) {
+      console.log(`  ${a.isEnabled ? '[x]' : '[ ]'} ${a.text}`);
+    }
+    if (result.rateLimit !== undefined) {
+      console.log(
+        `\nQuota: ${result.rateLimit.remaining}/${result.rateLimit.limit} remaining this hour.`,
+      );
+    }
+    console.log(`\nNext: configure and render with \`nl render ${intent.id}\``);
+  } catch (err: unknown) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Streaming-create path — opens the SSE endpoint, renders progressive
+ * phase events. Returns the exit code.
+ */
+async function runStreamingCreate(
+  client: UserApiClient,
+  text: string | undefined,
+  opts: {
+    tone?: string;
+    source?: { type: string; text?: string; url?: string; title?: string; author?: string };
+    streamText?: boolean;
+    verbose?: boolean;
+    idempotencyKey?: string;
+  },
+): Promise<number> {
+  // Pre-flight auth refresh — cheap JWT decode; refresh only if expiring soon.
+  await client.refreshIfExpiringSoon();
+
+  const idempotencyKey = opts.idempotencyKey ?? randomUUID();
+  const streamText = Boolean(opts.streamText || opts.verbose);
+  const renderer = new StreamRenderer({
+    streamText,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    operation: 'create',
+    ...streamTelemetrySink(),
+  });
+
+  let fallbackTriggered = false;
+
+  const handlers: GenerationStreamHandlers = {
+    onEvent: (event: StreamingProtocolEvent) => renderer.onEvent(event),
+    onFallback: () => {
+      fallbackTriggered = true;
+      renderer.onFallback();
+    },
+    onError: (err: StreamError) => renderer.onError(err),
+  };
+
+  const stream = openGenerationStream(
+    {
+      request: {
+        kind: 'generate',
+        ...(text ? { intentText: text } : {}),
+        ...(opts.tone ? { tonePreference: opts.tone } : {}),
+        ...(opts.source ? { source: opts.source } : {}),
+      },
+      clientIdempotencyKey: idempotencyKey,
+      apiBaseUrl: client.getBaseUrl(),
+      getAccessToken: () => client.getAccessToken(),
+    },
+    handlers,
+  );
+
+  const sigintHandler = (): void => {
+    stream.abort();
+    renderer.cleanup();
+    process.exit(130);
+  };
+  process.once('SIGINT', sigintHandler);
+
+  try {
+    await stream.done;
+  } finally {
+    process.removeListener('SIGINT', sigintHandler);
+    renderer.cleanup();
+  }
+
+  if (fallbackTriggered) {
+    await runBlockingCreate(client, text, opts.tone, opts.source);
+    return 0;
+  }
+  return renderer.summary().exitCode;
+}
+
+/**
+ * Retry wrapper for `nl create`. Retries exactly once on 429 using the
+ * server-suggested wait. Per #855 the CLI honors whatever the server says
+ * via `Retry-After` rather than inventing its own backoff math.
+ *
+ * For short waits (< 60s, burst-cap hit) a single sleep is fine. For long
+ * waits (hourly-cap hit), we print a heads-up at the start plus a
+ * heartbeat every 30s so the user sees the CLI is alive — they can
+ * Ctrl-C at any time if they'd rather come back later. The retry is
+ * "once": if the second attempt also gets 429, the error propagates.
+ */
+async function runCreateWithRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err: unknown) {
+    if (!isRateLimitedError(err)) throw err;
+    // Only auto-retry honest rate-limit 429s. Other 429 paths on the same
+    // endpoint (e.g. abuse soft-ban) are not time-boxed — retrying just
+    // loses another minute and hides the real message. Propagate them so
+    // the CLI's top-level error handler shows the server's error string.
+    if (err.source !== 'rate_limit') throw err;
+    const waitSec = Math.ceil(err.retryAfterMs / 1000);
+    const resetLocal =
+      err.resetAt !== null ? new Date(err.resetAt).toLocaleTimeString() : 'shortly';
+
+    if (waitSec > 60) {
+      const minutes = Math.ceil(waitSec / 60);
+      console.error(
+        `  Rate limit hit. Capacity returns around ${resetLocal} (in ${minutes} minutes).`,
+      );
+      console.error(
+        `  Waiting for the server-suggested cooldown. Press Ctrl-C to cancel and retry later.`,
+      );
+    } else {
+      console.error(`  Rate limit hit — retrying in ${waitSec}s (server-suggested wait)...`);
+    }
+
+    await sleepWithHeartbeat(err.retryAfterMs, 30_000);
+    return fn();
+  }
+}
+
+/** Sleep for `totalMs`, emitting a progress line every `heartbeatMs`.
+ *  Waits shorter than heartbeatMs sleep once with no heartbeat. */
+async function sleepWithHeartbeat(totalMs: number, heartbeatMs: number): Promise<void> {
+  if (totalMs <= heartbeatMs) {
+    await new Promise((r) => setTimeout(r, totalMs));
+    return;
+  }
+  const deadline = Date.now() + totalMs;
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    const chunk = Math.min(remaining, heartbeatMs);
+    await new Promise((r) => setTimeout(r, chunk));
+    const left = Math.max(0, deadline - Date.now());
+    if (left > 0) {
+      const mm = Math.ceil(left / 60_000);
+      console.error(`  ... still waiting (${mm} min remaining)`);
+    }
+  }
+}
+
+function isRateLimitedError(err: unknown): err is Error & {
+  status: 429;
+  resetAt: number | null;
+  retryAfterMs: number;
+  source?: string;
+} {
+  return err instanceof Error && (err as { status?: number }).status === 429;
+}
+
+// ─── resume ─────────────────────────────────────────────────────────────────
+
+program
+  .command('resume <intent-id>')
+  .description('Resume Pass 2 for a framework-only playlist (or re-run the composition step)')
+  .option('--no-stream', 'Use the blocking endpoint')
+  .option('--stream-text', 'Render progressive output')
+  .option('--verbose', 'Alias for --stream-text')
+  .option('--idempotency-key <uuid>', 'Client idempotency key (auto-generated if omitted)')
+  .action(async (intentId: string, opts: {
+    stream: boolean;
+    streamText?: boolean;
+    verbose?: boolean;
+    idempotencyKey?: string;
+  }) => {
+    const client = getUserClient();
+    const resolvedId = await resolveIntentId(client, intentId);
+
+    if (opts.stream === false) {
+      const code = await runBlockingResume(client, resolvedId, opts.idempotencyKey);
+      if (code !== 0) process.exit(code);
+      return;
+    }
+
+    const code = await runStreamingResume(client, resolvedId, opts);
+    if (code !== 0) process.exit(code);
+  });
+
+async function runBlockingResume(
+  client: UserApiClient,
+  intentId: string,
+  idempotencyKeyOpt: string | undefined,
+): Promise<number> {
+  const idempotencyKey = idempotencyKeyOpt ?? randomUUID();
+  let outcome: ResumeBlockingOutcome;
+  try {
+    outcome = await client.resumeIntent(intentId, idempotencyKey);
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+
+  const renderer = new StreamRenderer({
+    streamText: false,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    operation: 'resume',
+    ...streamTelemetrySink(),
+  });
+  renderer.onResumeBlockingOutcome(outcome);
+  renderer.cleanup();
+  return renderer.summary().exitCode;
+}
+
+async function runStreamingResume(
+  client: UserApiClient,
+  intentId: string,
+  opts: { streamText?: boolean; verbose?: boolean; idempotencyKey?: string },
+): Promise<number> {
+  await client.refreshIfExpiringSoon();
+
+  const idempotencyKey = opts.idempotencyKey ?? randomUUID();
+  const streamText = Boolean(opts.streamText || opts.verbose);
+  const renderer = new StreamRenderer({
+    streamText,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    operation: 'resume',
+    ...streamTelemetrySink(),
+  });
+
+  let fallbackTriggered = false;
+
+  const handlers: GenerationStreamHandlers = {
+    onEvent: (event) => renderer.onEvent(event),
+    onFallback: () => {
+      fallbackTriggered = true;
+      renderer.onFallback();
+    },
+    onError: (err) => renderer.onError(err),
+    onResumeBlockingOutcome: (outcome) => renderer.onResumeBlockingOutcome(outcome),
+  };
+
+  const stream = openGenerationStream(
+    {
+      request: { kind: 'resume', resumeIntentId: intentId },
+      clientIdempotencyKey: idempotencyKey,
+      apiBaseUrl: client.getBaseUrl(),
+      getAccessToken: () => client.getAccessToken(),
+    },
+    handlers,
+  );
+
+  const sigintHandler = (): void => {
+    stream.abort();
+    renderer.cleanup();
+    process.exit(130);
+  };
+  process.once('SIGINT', sigintHandler);
+
+  try {
+    await stream.done;
+  } finally {
+    process.removeListener('SIGINT', sigintHandler);
+    renderer.cleanup();
+  }
+
+  if (fallbackTriggered) {
+    return runBlockingResume(client, intentId, idempotencyKey);
+  }
+  return renderer.summary().exitCode;
+}
 
 // ─── download ───────────────────────────────────────────────────────────────
 
@@ -940,11 +1549,12 @@ program
     const client = getUserClient();
 
     try {
-      // Find the render job ID from the library
+      // Resolve short/partial ID to full ID, then find the library item for render info
+      const resolvedId = await resolveIntentId(client, intentId);
       const { items } = await client.getLibrary();
-      const item = items.find((i) => i.intent.id === intentId || i.intent.id.startsWith(intentId));
+      const item = items.find((i) => i.intent.id === resolvedId);
       if (!item) {
-        console.error('Error: practice set not found in your library');
+        console.error('Error: playlist not found in your library');
         process.exit(1);
       }
       const renderJob = item.latestRenderJob;
@@ -996,7 +1606,7 @@ program
 
 program
   .command('share <intent-id>')
-  .description('Generate a share link for a practice set')
+  .description('Generate a share link for a playlist')
   .action(async (intentId: string) => {
     const client = getUserClient();
     try {
@@ -1008,7 +1618,6 @@ program
       process.exit(1);
     }
   });
-
 
 // ─── delete ────────────────────────────────────────────────────────────────
 
@@ -1093,7 +1702,7 @@ function printFilteredItems(items: LibraryItemForFilter[]): void {
 
 program
   .command('delete [intent-id]')
-  .description('Delete practice sets from your library. Pass an ID for single delete, or use filters for bulk delete.')
+  .description('Delete playlists from your library. Pass an ID for single delete, or use filters for bulk delete.')
   .option('-f, --force', 'Skip confirmation prompt')
   .option('--filter <filter>', 'Filter: no-audio, has-audio, never-played')
   .option('--not-played-since <duration>', 'Delete sets not played in N days/weeks (e.g. 7d, 2w)')
@@ -1144,11 +1753,11 @@ program
       const items = await getFilteredLibraryItems(client, opts.filter, opts.notPlayedSince);
 
       if (items.length === 0) {
-        console.log('No matching practice sets found.');
+        console.log('No matching playlists found.');
         return;
       }
 
-      console.log(`Found ${items.length} matching practice set(s):\n`);
+      console.log(`Found ${items.length} matching playlist(s):\n`);
       printFilteredItems(items);
       console.log();
 
@@ -1168,7 +1777,7 @@ program
         const result = await client.bulkDeleteIntents(batch);
         totalDeleted += result.deleted;
       }
-      console.log(`Deleted ${totalDeleted} practice set(s).`);
+      console.log(`Deleted ${totalDeleted} playlist(s).`);
     } catch (err: unknown) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
@@ -1179,7 +1788,7 @@ program
 
 program
   .command('cleanup')
-  .description('Preview which practice sets would be deleted by a filter (dry run — does not delete)')
+  .description('Preview which playlists would be deleted by a filter (dry run — does not delete)')
   .option('--filter <filter>', 'Filter: no-audio, has-audio, never-played')
   .option('--not-played-since <duration>', 'Sets not played in N days/weeks (e.g. 7d, 2w)')
   .action(async (opts: { filter?: string; notPlayedSince?: string }) => {
@@ -1204,11 +1813,11 @@ program
       const items = await getFilteredLibraryItems(client, opts.filter, opts.notPlayedSince);
 
       if (items.length === 0) {
-        console.log('No matching practice sets found.');
+        console.log('No matching playlists found.');
         return;
       }
 
-      console.log(`Found ${items.length} matching practice set(s):\n`);
+      console.log(`Found ${items.length} matching playlist(s):\n`);
       printFilteredItems(items);
 
       // Build the equivalent delete command
@@ -1289,9 +1898,6 @@ settingsCmd
     }
   });
 
-// ─── account ───────────────────────────────────────────────────────────────
-
-
 // ─── library search ────────────────────────────────────────────────────────
 
 program
@@ -1329,96 +1935,148 @@ program
     }
   });
 
-
-// ─── voices ───────────────────────────────────────────────────────────────
-
-program
-  .command('voices')
-  .description('List available voices')
-  .option('--gender <gender>', 'Filter by gender (e.g. male, female)')
-  .option('--accent <accent>', 'Filter by accent (e.g. american, british)')
-  .option('--tier <tier>', 'Filter by tier (e.g. free, premium)')
-  .action(async (opts: { gender?: string; accent?: string; tier?: string }) => {
-    // Resolve env from parent command (global --env option)
-    const env = (program.opts().env ?? 'production') as ApiEnv;
-    try {
-      const { voices } = await UserApiClient.getVoices(env);
-
-      // Only show enabled voices
-      let filtered = voices.filter((v: Voice) => v.enabled);
-
-      // Case-insensitive filtering
-      if (opts.gender) {
-        const g = opts.gender.toLowerCase();
-        filtered = filtered.filter((v: Voice) => v.gender.toLowerCase() === g);
-      }
-      if (opts.accent) {
-        const a = opts.accent.toLowerCase();
-        filtered = filtered.filter((v: Voice) => v.accent.toLowerCase() === a);
-      }
-      if (opts.tier) {
-        const t = opts.tier.toLowerCase();
-        filtered = filtered.filter((v: Voice) => v.tier.toLowerCase() === t);
-      }
-
-      // Sort by sortOrder
-      filtered.sort((a: Voice, b: Voice) => a.sortOrder - b.sortOrder);
-
-      if (filtered.length === 0) {
-        console.log('No matching voices found.');
-        return;
-      }
-
-      const rows = filtered.map((v: Voice) => [
-        v.displayName,
-        v.provider,
-        v.gender,
-        v.accent,
-        v.tier,
-      ]);
-      printTable(rows, ['Name', 'Provider', 'Gender', 'Style', 'Tier']);
-    } catch (err: unknown) {
-      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  });
-
-// ─── render-status ────────────────────────────────────────────────────────
+// ─── library view (#2209) ──────────────────────────────────────────────────
 
 program
-  .command('render-status <intent-id>')
-  .description('Check the status of a render job')
+  .command('view <intent-id>')
+  .description('View a playlist with affirmations, render status, and play stats')
   .action(async (intentId: string) => {
     const client = getUserClient();
     try {
       const resolvedId = await resolveIntentId(client, intentId);
-      const status = await client.getRenderStatus(resolvedId);
-
-      console.log(`Status: ${status.status}`);
-
-      if (status.jobId) {
-        console.log(`Job ID: ${status.jobId}`);
+      const { intent, stats } = await client.getIntent(resolvedId);
+      if (!intent) {
+        console.error('Error: playlist not found');
+        process.exit(1);
       }
 
-      if (status.status !== 'none') {
-        console.log(`Progress: ${status.progress}%`);
+      console.log(`${intent.emoji ?? ''} ${intent.title}`.trim());
+      console.log(`ID: ${intent.id}`);
+      console.log(`Context: ${intent.sessionContext}`);
+
+      const latestSet = intent.affirmationSets[0];
+      if (latestSet) {
+        const enabled = latestSet.affirmations.filter((a) => a.isEnabled).length;
+        const total = latestSet.affirmations.length;
+        console.log(`\nAffirmations: ${enabled} enabled / ${total} total`);
+        for (const a of latestSet.affirmations) {
+          const fb = a.feedback === 'liked' ? ' [liked]' : a.feedback === 'disliked' ? ' [disliked]' : '';
+          console.log(`  ${a.isEnabled ? '[x]' : '[ ]'} ${a.text}${fb}`);
+        }
       }
 
-      if (status.status === 'failed' && status.errorMessage) {
-        console.log(`Error: ${status.errorMessage}`);
-      }
+      // Render status
+      const setId = latestSet?.id;
+      const config = setId
+        ? intent.renderConfigs.find((c) => c.affirmationSetId === setId)
+        : intent.renderConfigs[0];
+      const renderJob = config?.renderJobs?.[0];
+      console.log(`\nRender: ${renderJob?.status ?? 'none'}`);
 
-      if (status.status === 'completed' && status.jobId) {
-        console.log(`Download with: neuralingual download ${status.jobId}`);
-      }
-
-      if (status.status === 'none') {
-        console.log('No render job found. Configure and start a render first.');
+      // Play stats
+      if (stats) {
+        console.log(`\nStats:`);
+        console.log(`  Plays: ${stats.playCount}`);
+        console.log(`  Completed: ${stats.completedCount}`);
+        console.log(`  Listen time: ${Math.round(stats.totalListenSeconds / 60)}min`);
+        if (stats.lastPlayedAt) console.log(`  Last played: ${stats.lastPlayedAt}`);
       }
     } catch (err: unknown) {
       console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
   });
+
+// ─── affirmation feedback & toggle (#2209) ─────────────────────────────────
+
+program
+  .command('feedback <intent-id>')
+  .description('Like or dislike affirmations in a playlist')
+  .requiredOption('--ids <ids>', 'Comma-separated affirmation IDs')
+  .requiredOption('--action <action>', 'Feedback action: liked, disliked, or clear')
+  .action(async (intentId: string, opts: { ids: string; action: string }) => {
+    const validActions = ['liked', 'disliked', 'clear'];
+    if (!validActions.includes(opts.action)) {
+      console.error(`Error: --action must be one of: ${validActions.join(', ')}`);
+      process.exit(1);
+    }
+    const feedback = opts.action === 'clear' ? null : (opts.action as 'liked' | 'disliked');
+    const affirmationIds = opts.ids.split(',').map((s) => s.trim()).filter(Boolean);
+    if (affirmationIds.length === 0) {
+      console.error('Error: --ids must contain at least one affirmation ID');
+      process.exit(1);
+    }
+
+    const client = getUserClient();
+    try {
+      const resolvedId = await resolveIntentId(client, intentId);
+      const { intent } = await client.getIntent(resolvedId);
+      if (!intent) {
+        console.error('Error: playlist not found');
+        process.exit(1);
+      }
+
+      let succeeded = 0;
+      let failed = 0;
+      for (const affId of affirmationIds) {
+        try {
+          await client.feedbackAffirmation(affId, feedback);
+          succeeded++;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`  Failed for ${affId}: ${msg}`);
+          failed++;
+        }
+      }
+      console.log(`Feedback applied: ${succeeded} succeeded, ${failed} failed.`);
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('toggle <intent-id>')
+  .description('Enable or disable affirmations in a playlist')
+  .requiredOption('--ids <ids>', 'Comma-separated affirmation IDs')
+  .requiredOption('--enabled <bool>', 'true to enable, false to disable')
+  .action(async (intentId: string, opts: { ids: string; enabled: string }) => {
+    const isEnabled = opts.enabled === 'true';
+    if (opts.enabled !== 'true' && opts.enabled !== 'false') {
+      console.error('Error: --enabled must be "true" or "false"');
+      process.exit(1);
+    }
+    const affirmationIds = opts.ids.split(',').map((s) => s.trim()).filter(Boolean);
+    if (affirmationIds.length === 0) {
+      console.error('Error: --ids must contain at least one affirmation ID');
+      process.exit(1);
+    }
+
+    const client = getUserClient();
+    try {
+      const resolvedId = await resolveIntentId(client, intentId);
+      const { intent } = await client.getIntent(resolvedId);
+      if (!intent) {
+        console.error('Error: playlist not found');
+        process.exit(1);
+      }
+      const latestSet = intent.affirmationSets[0];
+      if (!latestSet) {
+        console.error('Error: no affirmation set found');
+        process.exit(1);
+      }
+      await client.batchToggleAffirmations(latestSet.id, affirmationIds, isEnabled);
+      console.log(`Toggled ${affirmationIds.length} affirmation(s) to ${isEnabled ? 'enabled' : 'disabled'}.`);
+    } catch (err: unknown) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+
+// Install the MCP failure telemetry sink (#2867). The CLI is interactive, so
+// it defaults to silent — opt in with NL_MCP_TELEMETRY=stderr|posthog (mirrors
+// the existing NL_STREAM_TELEMETRY convention).
+installEnvTelemetrySink('none');
 
 program.parse(process.argv);

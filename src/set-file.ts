@@ -36,7 +36,7 @@ const setFileSchema = z.object({
   repeats: z.number().int().min(1).max(5).optional(),
   preamble: z.boolean().optional(),
   playAll: z.boolean().optional(),
-  repetitionModel: z.enum(['sequential', 'shuffle', 'weighted_shuffle', 'favorites_first']).optional(),
+  repetitionModel: z.enum(['sequential', 'shuffle']).optional(),
   category: z.string().min(1).optional(),
   description: z.string().min(1).optional(),
   order: z.number().int().positive().optional(),

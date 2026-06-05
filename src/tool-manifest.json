@@ -5,7 +5,7 @@
   "tools": [
     {
       "name": "nl_library",
-      "description": "List all practice sets in the user's library. Returns title, emoji, context, affirmation count, and render status for each set.",
+      "description": "List all playlists in the user's library. Returns title, emoji, context, affirmation count, and render status for each playlist.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -23,7 +23,7 @@
     },
     {
       "name": "nl_search",
-      "description": "Search practice sets in the library by keyword. Matches against title, emoji, and session context.",
+      "description": "Search playlists in the library by keyword. Matches against title, emoji, and session context.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -158,6 +158,27 @@
             "type": "string",
             "format": "uri",
             "description": "YouTube video URL. Server extracts the transcript (captions) automatically. Mutually exclusive with sourceText, sourceUrl, and sourcePdf."
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "naval",
+              "punchy",
+              "plainspoken",
+              "oprah",
+              "dalai_lama",
+              "marcus_aurelius",
+              "maya_angelou",
+              "brene_brown",
+              "rumi",
+              "tony_robbins"
+            ],
+            "description": "Named rhetorical-style preset to steer the writing style. Core: 'punchy' = very short, declarative, no filler (good when output feels too elaborate); 'plainspoken' = conversational and concrete; 'naval' = aphoristic and paradoxical. Persona pack (rhetorical cadence only — no quotes or impersonation): 'oprah' = warm, affirming, possibility-focused; 'dalai_lama' = serene, compassionate, spacious; 'marcus_aurelius' = stoic, terse maxims, control-vs-uncontrol; 'maya_angelou' = lyrical-but-grounded, cadenced, themes of rising; 'brene_brown' = warm, vulnerable, candid; 'rumi' = poetic, mystical, metaphor-rich (the most elaborate option); 'tony_robbins' = high-energy, decisive, action-framed (no hype). Combine with styleNotes to override individual dials."
+          },
+          "styleNotes": {
+            "type": "object",
+            "description": "Free-form rhetorical-style dials to fine-tune the writing style. Recognized keys: sentenceLength, ideaDensity, paradox, directness, register, structurePatterns (each a short phrase). When combined with 'style', these keys override the preset. Each value max 200 chars.",
+            "additionalProperties": true
           }
         },
         "additionalProperties": false
@@ -174,14 +195,14 @@
     },
     {
       "name": "nl_rename",
-      "description": "Update the title and/or emoji of a practice set. At least one of title or emoji must be provided.",
+      "description": "Update the title and/or emoji of a playlist. At least one of title or emoji must be provided.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           },
           "title": {
             "type": "string",
@@ -214,14 +235,14 @@
     },
     {
       "name": "nl_sync_affirmations",
-      "description": "Declarative edit of affirmations in a practice set. Provide the complete desired list \u2014 affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them.",
+      "description": "Declarative edit of affirmations in a playlist. Provide the complete desired list \u2014 affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           },
           "affirmations": {
             "type": "array",
@@ -270,14 +291,14 @@
     },
     {
       "name": "nl_delete",
-      "description": "Delete a practice set permanently. This cannot be undone.",
+      "description": "Delete a playlist permanently. This cannot be undone.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
         "required": [
@@ -295,19 +316,19 @@
         "clientMethod": "deleteIntent",
         "resolveId": true,
         "responseFormat": "void",
-        "successMessage": "Deleted practice set {id}."
+        "successMessage": "Deleted playlist {id}."
       }
     },
     {
       "name": "nl_render_configure",
-      "description": "Configure render settings for a practice set. Must be done before starting a render. Use nl_voices to find available voice IDs.",
+      "description": "Configure render settings for a playlist. Must be done before starting a render. Use nl_voices to find available voice IDs.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           },
           "voiceId": {
             "type": "string",
@@ -388,14 +409,14 @@
     },
     {
       "name": "nl_render_start",
-      "description": "Start rendering audio for a practice set. The set must have a render config (use nl_render_configure first). Returns a job ID for tracking progress.",
+      "description": "Start rendering audio for a playlist. The set must have a render config (use nl_render_configure first). Returns a job ID for tracking progress.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
         "required": [
@@ -417,14 +438,14 @@
     },
     {
       "name": "nl_render_status",
-      "description": "Check the render progress of a practice set. Returns status (none, queued, processing, completed, failed) and progress percentage.",
+      "description": "Check the render progress of a playlist. Returns status (none, queued, processing, completed, failed) and progress percentage.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
         "required": [
@@ -446,14 +467,14 @@
     },
     {
       "name": "nl_rerender",
-      "description": "Re-render a practice set with its current config. Convenience wrapper that starts a new render job.",
+      "description": "Re-render a playlist with its current config. Convenience wrapper that starts a new render job.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
         "required": [
@@ -475,14 +496,14 @@
     },
     {
       "name": "nl_play",
-      "description": "Download rendered audio for a practice set and return the local file path. The audio must be fully rendered first (status: completed). The file is cached locally for future use.",
+      "description": "Download rendered audio for a playlist and return the local file path. The audio must be fully rendered first (status: completed). The file is cached locally for future use.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
         "required": [
@@ -503,14 +524,14 @@
     },
     {
       "name": "nl_share",
-      "description": "Generate a public share link for a practice set. Anyone with the link can view and copy it.",
+      "description": "Generate a public share link for a playlist. Anyone with the link can view and copy it.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           }
         },
         "required": [
@@ -542,9 +563,7 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": [
-          "id"
-        ],
+        "required": ["id"],
         "additionalProperties": false
       },
       "endpoint": {
@@ -641,14 +660,14 @@
     },
     {
       "name": "nl_set_import",
-      "description": "Apply a YAML set file to an existing practice set. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_set_export to get the current YAML first, edit it, then import.",
+      "description": "Apply a YAML set file to an existing playlist. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_set_export to get the current YAML first, edit it, then import.",
       "parameters": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "minLength": 1,
-            "description": "Practice set ID (full or short prefix)"
+            "description": "Playlist ID (full or short prefix)"
           },
           "yaml": {
             "type": "string",
