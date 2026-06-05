@@ -69,7 +69,6 @@ export interface CreateIntentInput {
   rawText: string;
   tonePreference?: TonePreference | undefined;
   sessionContext?: SessionContext | undefined;
-  isCatalog?: boolean | undefined;
 }
 
 export interface UpdateIntentInput {
@@ -78,6 +77,38 @@ export interface UpdateIntentInput {
   title?: string | undefined;
   rawText?: string | undefined;
   emoji?: string | null | undefined;
+}
+
+/**
+ * Input for thought-leader styled generation (#2730). `corpus` is the source
+ * material, `styleNotes` is the hand-authored rhetorical style profile, and
+ * `attribution` is the credit string.
+ *
+ * `intentText` (#2733) is an optional NEUTRAL practice description used as the
+ * intent's rawText. It must NOT name a public figure — `attribution` is stored
+ * separately for display and must never feed the safety gatekeeper. When
+ * omitted, the API uses a neutral synthetic rawText.
+ */
+export interface ThoughtLeaderInput {
+  corpus: string;
+  /**
+   * #2744 — Optional rhetorical style profile (voice dial). Independent of
+   * `anchorQuotes`; omit for anchorQuotes-only or neutral generation.
+   */
+  styleNotes?: Record<string, unknown> | undefined;
+  attribution: string;
+  intentText?: string | undefined;
+  title?: string | undefined;
+  tone?: TonePreference | undefined;
+  sourceTitle?: string | undefined;
+  sourceAuthor?: string | undefined;
+  /**
+   * #2740/#2744 — Curated array of exact lines to include near-verbatim. The
+   * mere PRESENCE of a non-empty array activates quote-forward generation
+   * (anchors blended near-verbatim with style-informed originals) — there is no
+   * separate mode flag.
+   */
+  anchorQuotes?: string[] | undefined;
 }
 
 export interface CatalogPublishInput {
@@ -157,7 +188,7 @@ export interface RenderConfigInput {
   affirmationRepeatCount?: number | undefined;
   includePreamble?: boolean | undefined;
   playAll?: boolean | undefined;
-  repetitionModel?: 'sequential' | 'shuffle' | 'weighted_shuffle' | 'favorites_first' | undefined;
+  repetitionModel?: 'sequential' | 'shuffle' | undefined;
   binauralPreset?: 'theta' | 'alpha' | 'beta' | null | undefined;
   binauralVolume?: number | undefined;
   subliminalEnabled?: boolean | undefined;
@@ -246,4 +277,6 @@ export interface Voice {
   tier: string;
   sortOrder: number;
   enabled: boolean;
+  contexts: SessionContext[];
 }
+

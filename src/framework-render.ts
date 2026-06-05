@@ -29,7 +29,7 @@ export interface FrameworkLike {
 }
 
 export const NO_FRAMEWORK_MESSAGE =
-  'No framework available for this practice set. Legacy and second-person sets do not carry a framework.';
+  'No framework available for this playlist. Legacy and second-person sets do not carry a framework.';
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 

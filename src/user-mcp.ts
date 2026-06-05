@@ -3,8 +3,8 @@
  * Neuralingual User MCP Server (manifest-driven)
  *
  * Registers user-facing MCP tools by iterating tool-manifest.json.
- * The manifest is the single source of truth for tool names, descriptions,
- * and parameter schemas. Handler logic lives in CUSTOM_HANDLERS below.
+ * This is the single source of truth for tool definitions — the public
+ * repo (neuralingual-mcp) will consume this manifest in Phase 2.
  *
  * Handler types:
  * - "client-method": generic pass-through to UserApiClient methods
@@ -13,9 +13,9 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { readFileSync, realpathSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, join } from 'path';
+import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { UserApiClient } from './user-client.js';
 import { loadAuth } from './auth-store.js';
@@ -37,18 +37,17 @@ import type {
   RenderConfig,
 } from './types.js';
 import type { SetFileData } from './set-file.js';
-
-// Resolve through symlinks so this works when invoked via npm global bin symlink.
-// `import.meta.url` returns the symlink path (e.g. /opt/homebrew/bin/neuralingual-mcp);
-// `realpathSync` dereferences it to the real dist/ directory where tool-manifest.json lives.
-const __filename = realpathSync(fileURLToPath(import.meta.url));
-const __dirname = dirname(__filename);
-const manifest = JSON.parse(
-  readFileSync(join(__dirname, 'tool-manifest.json'), 'utf-8'),
-) as ToolManifest;
+import manifest from './tool-manifest.json' with { type: 'json' };
 
 const SERVER_NAME = 'neuralingual';
-const SERVER_VERSION = '0.5.0';
+
+// Read version from package.json at runtime so it can't drift from the
+// published version.  Works in both the monorepo (packages/mcp) and the
+// public repo (neuralingual-mcp) because each has its own package.json.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SERVER_VERSION: string = JSON.parse(
+  readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'),
+).version;
 
 const AUDIO_CACHE_DIR = join(homedir(), '.config', 'neuralingual', 'audio');
 
@@ -79,26 +78,6 @@ async function withClient<T>(fn: (client: UserApiClient) => Promise<T>) {
     const msg = err instanceof Error ? err.message : String(err);
     return errorResult(msg);
   }
-}
-
-/**
- * Resolve a short/truncated intent ID to the full ID via library lookup.
- * Supports exact match and unique prefix match.
- */
-async function resolveIntentId(client: UserApiClient, shortId: string): Promise<string> {
-  const { items } = await client.getLibrary();
-  const exact = items.find((i) => i.intent.id === shortId);
-  if (exact) return exact.intent.id;
-
-  const prefixMatches = items.filter((i) => i.intent.id.startsWith(shortId));
-  if (prefixMatches.length === 1) return prefixMatches[0]!.intent.id;
-  if (prefixMatches.length > 1) {
-    throw new Error(
-      `Ambiguous ID "${shortId}" matches ${prefixMatches.length} sets. Use a longer prefix or the full ID.`,
-    );
-  }
-
-  throw new Error('Playlist not found. Use nl_library to see available sets.');
 }
 
 /**
@@ -159,6 +138,25 @@ async function resolveLatestSetId(
     return { ok: false, error: errorResult('No affirmation set found for this playlist.') };
   }
   return { ok: true, intentId: resolvedId, setId: latestSet.id };
+}
+
+/**
+ * Resolve a short/truncated intent ID to the full ID via library lookup.
+ */
+async function resolveIntentId(client: UserApiClient, shortId: string): Promise<string> {
+  const { items } = await client.getLibrary();
+  const exact = items.find((i) => i.intent.id === shortId);
+  if (exact) return exact.intent.id;
+
+  const prefixMatches = items.filter((i) => i.intent.id.startsWith(shortId));
+  if (prefixMatches.length === 1) return prefixMatches[0]!.intent.id;
+  if (prefixMatches.length > 1) {
+    throw new Error(
+      `Ambiguous ID "${shortId}" matches ${prefixMatches.length} sets. Use a longer prefix or the full ID.`,
+    );
+  }
+
+  throw new Error('Playlist not found. Use nl_library to see available sets.');
 }
 
 /**
@@ -308,7 +306,7 @@ async function applySetFile(
 
   if (hasRenderFields) {
     if (!originalData.renderConfig) {
-      changes.push('render config: skipped (no existing config -- run nl_render_configure first)');
+      changes.push('render config: skipped (no existing config — run nl_render_configure first)');
     } else {
       const rc = originalData.renderConfig;
       const input: RenderConfigInput = {
@@ -365,9 +363,17 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       if (!intent) {
         return errorResult('Playlist not found. Use nl_library to see available sets.');
       }
+      // Additive framework surfacing (#749). Spreads existing intent fields
+      // unchanged at the top level, adds three framework-metadata fields
+      // alongside so current consumers keep working. Per #749 acceptance
+      // criteria we must NOT dump the full framework JSON — that's
+      // nl_guide's job. Strip `framework` + raw LLM payloads from each
+      // affirmation set before stringifying to keep this tool lightweight.
       const latestSet = intent.affirmationSets[0];
       const framework = latestSet?.framework ?? null;
-      // Strip framework + raw LLM payloads defensively.
+      // Strip framework + raw LLM payloads defensively — they may or may not
+      // be present depending on legacy vs framework-first rows. Shallow-copy
+      // each set into a plain object so we don't mutate the client response.
       const sanitizedAffirmationSets = intent.affirmationSets.map((set) => {
         const bag: Record<string, unknown> = { ...set };
         delete bag['framework'];
@@ -375,7 +381,9 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         delete bag['rawAffirmationsLlm'];
         return bag;
       });
-      // Strip sourceText from response -- it can be very large
+      // Strip sourceText from response — it can be very large (up to 16k
+      // chars) and nl_info should show metadata only. sourceText is still
+      // available via nl_set_export if needed.
       const intentBag: Record<string, unknown> = { ...intent };
       delete intentBag['sourceText'];
       const response = {
@@ -465,6 +473,11 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const sourceYoutube = params['sourceYoutube'] as string | undefined;
       const sourceTitle = params['sourceTitle'] as string | undefined;
       const sourceAuthor = params['sourceAuthor'] as string | undefined;
+      // #3062 — Optional rhetorical-style steering: a named preset and/or
+      // free-form dials. Resolved + validated server-side (unknown preset,
+      // over-bounds, or injection → 400).
+      const style = params['style'] as string | undefined;
+      const styleNotes = params['styleNotes'] as Record<string, unknown> | undefined;
 
       if (!text && !sourceText && !sourceUrl && !sourcePdf && !sourceYoutube) {
         return errorResult('Please provide intent text, source material (sourceText, sourceUrl, sourcePdf, or sourceYoutube), or both.');
@@ -475,19 +488,22 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         return errorResult('sourceText, sourceUrl, sourcePdf, and sourceYoutube are mutually exclusive. Use one at a time.');
       }
 
-      // PDF source: file path or base64-encoded content
+      // #999 — PDF source: file path or base64-encoded content
       let pdfExtractedText: string | undefined;
       if (sourcePdf) {
         let buffer: Buffer;
 
+        // Detect base64 vs file path: base64-encoded PDFs always start
+        // with "JVBER" (base64 of "%PDF-"). Anything else is a file path.
         const isBase64Pdf = sourcePdf.startsWith('JVBER');
         if (!isBase64Pdf) {
-          const { readFileSync, existsSync: fsExistsSync } = await import('node:fs');
-          if (!fsExistsSync(sourcePdf)) {
+          const { readFileSync, existsSync } = await import('node:fs');
+          if (!existsSync(sourcePdf)) {
             return errorResult(`File not found: ${sourcePdf}`);
           }
           buffer = readFileSync(sourcePdf);
         } else {
+          // Base64-encoded PDF content
           try {
             buffer = Buffer.from(sourcePdf, 'base64');
           } catch {
@@ -536,7 +552,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
                   }
                 : undefined;
 
-      // Fetch YouTube preview metadata and include in result
+      // #1001 — Fetch YouTube preview metadata and include in result
       let youtubePreview: { title: string; channelName: string | null; charCount: number; truncated: boolean } | undefined;
       if (source?.type === 'youtube' && source.url) {
         try {
@@ -548,11 +564,11 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
             truncated: preview.truncated,
           };
         } catch {
-          // Preview failure is non-fatal
+          // Preview failure is non-fatal — generation will still extract
         }
       }
 
-      const result = await client.createAndGenerate(text, tone, source);
+      const result = await client.createAndGenerate(text, tone, source, style, styleNotes);
       const output = youtubePreview
         ? { ...result, youtubePreview }
         : result;
@@ -676,7 +692,10 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         return textResult(yaml);
       }
 
-      // Prepend framework markdown before the YAML body.
+      // Prepend framework markdown before the YAML body. Blank-line separator
+      // (no standalone `---`) avoids colliding with YAML's document-start
+      // marker. The combined output is NOT re-importable via nl_set_import
+      // — that's documented in the tool description.
       const markdown = renderFrameworkMarkdown(framework);
       return textResult(`${markdown}\n${yaml}`);
     }),
@@ -689,7 +708,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(result);
     }),
 
-  // ── Username tools ──────────────────────────────────────────────────
+  // ── Username tools (#2138) ──────────────────────────────────────────
 
   userProfile: async () =>
     withClient(async (client) => {
@@ -737,7 +756,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(result, null, 2));
     }),
 
-  // ── Catalog tools ───────────────────────────────────────────────────
+  // ── Catalog tools (#2336) ───────────────────────────────────────────
 
   catalogBrowse: async (params) =>
     withClient(async (client) => {
@@ -761,7 +780,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const total = sets.length;
       // Client-side pagination
       sets = sets.slice(offset, offset + limit);
-      // Summarize for token efficiency
+      // Summarize for token efficiency (full details via nl_catalog_view)
       const summary = sets.map((s) => ({
         slug: s['slug'],
         title: s['title'],
@@ -791,7 +810,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(result, null, 2));
     }),
 
-  // ── Library tools ───────────────────────────────────────────────────
+  // ── Library tools (#2209) ───────────────────────────────────────────
 
   libraryList: async () =>
     withClient(async (client) => {
@@ -848,7 +867,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(response, null, 2));
     }),
 
-  // ── Affirmation management tools ────────────────────────────────────
+  // ── Affirmation management tools (#2209) ────────────────────────────
 
   affirmationsFeedback: async (params) =>
     withClient(async (client) => {
@@ -919,7 +938,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       );
     }),
 
-  // ── Context Settings tools ─────────────────────────────────────────
+  // ── Context Settings tools (#2335) ─────────────────────────────────
 
   contextSettingsList: async () =>
     withClient(async (client) => {
@@ -962,7 +981,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(defaults, null, 2));
     }),
 
-  // ── Source extraction tools ────────────────────────────────────────
+  // ── Source extraction tools (#2334) ─────────���──────────────────────
 
   sourceExtract: async (params) =>
     withClient(async (client) => {
@@ -989,8 +1008,8 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
     withClient(async (client) => {
       const filePath = params['filePath'] as string;
 
-      const { readFileSync, existsSync: fsExistsSync } = await import('node:fs');
-      if (!fsExistsSync(filePath)) {
+      const { readFileSync, existsSync } = await import('node:fs');
+      if (!existsSync(filePath)) {
         return errorResult(`File not found: ${filePath}`);
       }
 
@@ -1003,7 +1022,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(result, null, 2));
     }),
 
-  // ── Playback tracking tools ──────────────────────────────────────────
+  // ── Playback tracking tools (#2338) ──────────────────────────────────
 
   playbackStart: async (params) =>
     withClient(async (client) => {
@@ -1022,7 +1041,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(result, null, 2));
     }),
 
-  // ── Affirmation + Intent management tools ──────────────────────────
+  // ── Affirmation + Intent management tools (#2337) ──────────────────
 
   generateMore: async (params) =>
     withClient(async (client) => {
@@ -1132,9 +1151,20 @@ interface ToolManifest {
 
 // ── Server Builder ────────────────────────────────────────────────────────
 
+/**
+ * buildUserServer() is instantiated per-test (see `tool-manifest.test.ts`),
+ * so anything wired here runs N times per test run — not once per process.
+ *
+ * Do NOT register process-singleton side effects here: init loggers, cron
+ * jobs, one-time metrics emits, boot-state logs. Those belong in `main()`
+ * below, where the stdio transport also lives.
+ *
+ * Same rule as `apps/api/src/server.ts:buildServer()`. Reference issue: #868
+ * (from #856 / PR #867 retrospective).
+ */
 export function buildUserServer(): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-  const tools = manifest.tools;
+  const tools = (manifest as ToolManifest).tools;
 
   for (const tool of tools) {
     const inputSchema = jsonSchemaToInputSchema(tool.parameters as JsonSchema);
@@ -1198,6 +1228,12 @@ export function buildUserServer(): McpServer {
 // ── Main ──────────────────────────────────────────────────────────────────
 
 async function main() {
+  // Install the MCP failure telemetry sink (#2867). Defaults to stderr so a
+  // user-visible read failure (e.g. the Railway Postgres ETIMEDOUT class,
+  // #2828) reaches a sink instead of being invisible. NL_MCP_TELEMETRY=posthog
+  // routes to PostHog.
+  const { installEnvTelemetrySink } = await import('./mcp-telemetry.js');
+  installEnvTelemetrySink('stderr');
   const server = buildUserServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
