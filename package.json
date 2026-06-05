@@ -1,7 +1,7 @@
 {
   "name": "@innerstacklabs/neuralingual-mcp",
-  "version": "0.6.0",
-  "description": "Neuralingual CLI \u2014 AI-powered affirmation practice sets",
+  "version": "0.7.0",
+  "description": "Neuralingual CLI — AI-powered affirmation practice sets",
   "type": "module",
   "bin": {
     "neuralingual": "dist/cli.js",
