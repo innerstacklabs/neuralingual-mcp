@@ -162,18 +162,20 @@
           "style": {
             "type": "string",
             "enum": [
-              "naval",
-              "punchy",
+              "aphorist",
+              "minimalist",
               "plainspoken",
-              "oprah",
-              "dalai_lama",
-              "marcus_aurelius",
-              "maya_angelou",
-              "brene_brown",
-              "rumi",
-              "tony_robbins"
+              "mentor",
+              "contemplative",
+              "stoic",
+              "lyricist",
+              "mystic",
+              "visionary",
+              "sage",
+              "commander",
+              "meaning_maker"
             ],
-            "description": "Named rhetorical-style preset to steer the writing style. Core: 'punchy' = very short, declarative, no filler (good when output feels too elaborate); 'plainspoken' = conversational and concrete; 'naval' = aphoristic and paradoxical. Persona pack (rhetorical cadence only — no quotes or impersonation): 'oprah' = warm, affirming, possibility-focused; 'dalai_lama' = serene, compassionate, spacious; 'marcus_aurelius' = stoic, terse maxims, control-vs-uncontrol; 'maya_angelou' = lyrical-but-grounded, cadenced, themes of rising; 'brene_brown' = warm, vulnerable, candid; 'rumi' = poetic, mystical, metaphor-rich (the most elaborate option); 'tony_robbins' = high-energy, decisive, action-framed (no hype). Combine with styleNotes to override individual dials."
+            "description": "Named style archetype to steer the writing style (rhetorical cadence only — no quotes or impersonation). Choose one: 'aphorist' — The Aphorist: short, paradoxical, declarative wisdom; 'minimalist' — The Minimalist: four-to-seven-word verdicts, pure mantra (good when output feels too elaborate); 'plainspoken' — The Plainspoken: warm, concrete, everyday language; 'mentor' — The Mentor: generous, encouraging, you-centered; 'contemplative' — The Contemplative: serene, spacious, compassionate (good for winding down); 'stoic' — The Stoic: terse, duty- and control-framed maxims; 'lyricist' — The Lyricist: rhythmic and dignified, rising cadence; 'mystic' — The Mystic: poetic, metaphor-rich, paradoxical (the most elaborate option); 'visionary' — The Visionary: bold, taste-driven, excellence-obsessed; 'sage' — The Sage: folksy, patient, value-over-hype; 'commander' — The Commander: disciplined ownership and calm authority (demanding, never degrading); 'meaning_maker' — The Meaning-Maker: dignified, purpose-centered, meaning-in-hardship. Combine with styleNotes to override individual dials."
           },
           "styleNotes": {
             "type": "object",
