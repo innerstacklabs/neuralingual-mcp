@@ -13,7 +13,7 @@ interface UserDto {
   displayName: string | null;
   username: string | null;
   authProvider: string;
-  tonePreference: string;
+  tonePreference: string | null;
   defaultCoach: string | null;
   completedOnboarding: boolean;
   subscriptionTier: string | null;
@@ -957,6 +957,20 @@ export class UserApiClient {
   async checkUsername(username: string): Promise<{ available: boolean; suggestion?: string; error?: string }> {
     const qs = encodeURIComponent(username);
     return this.request('GET', `/auth/username/available?username=${qs}`);
+  }
+
+  // --- User Settings (#3117) ---
+
+  /**
+   * Update user-level profile settings via PATCH /auth/me. Thin wrapper that
+   * accepts the settings subset (defaultCoach, tonePreference). Validation is
+   * server-side (coachKeySchema, tonePreferenceSchema).
+   */
+  async updateSettings(data: {
+    defaultCoach?: string | null;
+    tonePreference?: string | null;
+  }): Promise<{ user: UserDto }> {
+    return this.request('PATCH', '/auth/me', data);
   }
 
   // --- Coaches (#3116) ---

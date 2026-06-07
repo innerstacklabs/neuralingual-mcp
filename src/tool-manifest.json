@@ -1702,6 +1702,34 @@
         "type": "custom",
         "customHandler": "coachView"
       }
+    },
+    {
+      "name": "nl_user_settings_update",
+      "description": "Update user profile settings. Set your default coach and/or tone preference. Pass null to clear a setting (defaultCoach=null clears coach, tonePreference=null resets to coach default).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "defaultCoach": {
+            "type": ["string", "null"],
+            "description": "Coach key to set as default (e.g. 'commander', 'mentor'), or null to clear"
+          },
+          "tonePreference": {
+            "type": ["string", "null"],
+            "enum": ["grounded", "open", "mystical", null],
+            "description": "Tone preference: 'grounded', 'open', 'mystical', or null to use coach default"
+          }
+        },
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/auth/me",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "userSettingsUpdate"
+      }
     }
   ]
 }
