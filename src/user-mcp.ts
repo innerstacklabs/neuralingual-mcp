@@ -726,6 +726,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
             displayName: user.displayName,
             username: user.username,
             tonePreference: user.tonePreference,
+            defaultCoach: user.defaultCoach,
             subscriptionTier: user.subscriptionTier,
             subscriptionStatus: user.subscriptionStatus,
             creditBalance: user.creditBalance,
@@ -1115,6 +1116,34 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(result, null, 2));
     });
   },
+
+  // ── #3117 — User settings update ─────────────────────────────────────────
+
+  userSettingsUpdate: async (params) =>
+    withClient(async (client) => {
+      const defaultCoach = params['defaultCoach'];
+      const tonePreference = params['tonePreference'];
+
+      if (defaultCoach === undefined && tonePreference === undefined) {
+        return errorResult('At least one setting must be provided (defaultCoach or tonePreference).');
+      }
+
+      const data: Record<string, unknown> = {};
+      if (defaultCoach !== undefined) data['defaultCoach'] = defaultCoach as string | null;
+      if (tonePreference !== undefined) data['tonePreference'] = tonePreference as string | null;
+
+      const result = await client.updateSettings(data as { defaultCoach?: string | null; tonePreference?: string | null });
+      return textResult(
+        JSON.stringify(
+          {
+            defaultCoach: result.user.defaultCoach,
+            tonePreference: result.user.tonePreference,
+          },
+          null,
+          2,
+        ),
+      );
+    }),
 
   // ── #3116 — Coach catalog tools ──────────────────────────────────────────
 
