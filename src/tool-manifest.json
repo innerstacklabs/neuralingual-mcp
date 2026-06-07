@@ -181,6 +181,28 @@
             "type": "object",
             "description": "Free-form rhetorical-style dials to fine-tune the writing style. Recognized keys: sentenceLength, ideaDensity, paradox, directness, register, structurePatterns (each a short phrase). When combined with 'style', these keys override the preset. Each value max 200 chars.",
             "additionalProperties": true
+          },
+          "coachKey": {
+            "type": "string",
+            "enum": [
+              "aphorist",
+              "minimalist",
+              "plainspoken",
+              "mentor",
+              "contemplative",
+              "stoic",
+              "lyricist",
+              "mystic",
+              "visionary",
+              "sage",
+              "commander",
+              "meaning_maker"
+            ],
+            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. Unknown keys are ignored (falls back to your default coach). Not saved — affects this generation only."
+          },
+          "setAsDefault": {
+            "type": "boolean",
+            "description": "When true AND coachKey is provided AND coaches feature is enabled: persist the coachKey as your new default coach after successful generation. Ignored when coachKey is absent, feature is off, or generation fails."
           }
         },
         "additionalProperties": false
@@ -1623,6 +1645,62 @@
       "handler": {
         "type": "custom",
         "customHandler": "intentUpdate"
+      }
+    },
+    {
+      "name": "nl_coaches",
+      "description": "List all available coaches with their summaries. Shows key, name, description, inspiredBy, signature voice, default tone, and voice perspective for each coach. Also indicates which coach is your current default. Requires the coaches feature to be enabled.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/coaches",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "coaches"
+      }
+    },
+    {
+      "name": "nl_coach_view",
+      "description": "View full details for a specific coach by key. Returns the coach's name, description, inspiredBy exemplars, signature voice, default tone, voice perspective, and visual metadata. Requires the coaches feature to be enabled.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "aphorist",
+              "minimalist",
+              "plainspoken",
+              "mentor",
+              "contemplative",
+              "stoic",
+              "lyricist",
+              "mystic",
+              "visionary",
+              "sage",
+              "commander",
+              "meaning_maker"
+            ],
+            "description": "The coach key to look up (e.g. 'commander', 'mentor', 'mystic')"
+          }
+        },
+        "required": ["key"],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/coaches",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "coachView"
       }
     }
   ]

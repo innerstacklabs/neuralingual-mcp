@@ -14,6 +14,7 @@ interface UserDto {
   username: string | null;
   authProvider: string;
   tonePreference: string;
+  defaultCoach: string | null;
   completedOnboarding: boolean;
   subscriptionTier: string | null;
   subscriptionStatus: string | null;
@@ -24,6 +25,18 @@ interface UserDto {
   creditsResetAt: string | null;
   role: string;
   createdAt?: string;
+}
+
+/** #3116 — Coach DTO (client-safe shape from GET /coaches). */
+interface CoachDto {
+  key: string;
+  name: string;
+  description: string;
+  inspiredBy: string[];
+  visual: { iconRef: string; focalPoint: { x: number; y: number }; aspectRatio: number };
+  signatureVoiceId: string;
+  defaultTone: string;
+  voicePerspective: string;
 }
 
 interface LoginResult {
@@ -805,6 +818,8 @@ export class UserApiClient {
     source?: { type: string; text?: string; url?: string; title?: string; author?: string },
     style?: string,
     styleNotes?: Record<string, unknown>,
+    coachKey?: string,
+    setAsDefault?: boolean,
   ): Promise<GenerateResult> {
     const body: Record<string, unknown> = {};
     if (intentText) body['intentText'] = intentText;
@@ -813,6 +828,10 @@ export class UserApiClient {
     // #3062 — Optional rhetorical-style steering (preset and/or free-form).
     if (style) body['style'] = style;
     if (styleNotes) body['styleNotes'] = styleNotes;
+    // #3111 — Optional per-generation coach override (server resolves tolerantly).
+    if (coachKey) body['coachKey'] = coachKey;
+    // #3115 — Persist coachKey as defaultCoach after successful generation.
+    if (setAsDefault) body['setAsDefault'] = true;
     return this.request('POST', '/affirmations/generate', body);
   }
 
@@ -827,6 +846,8 @@ export class UserApiClient {
     source?: { type: string; text?: string; url?: string; title?: string; author?: string },
     style?: string,
     styleNotes?: Record<string, unknown>,
+    coachKey?: string,
+    setAsDefault?: boolean,
   ): Promise<{ data: GenerateResult; rateLimit?: RateLimitMeta }> {
     const body: Record<string, unknown> = {};
     if (intentText) body['intentText'] = intentText;
@@ -835,6 +856,10 @@ export class UserApiClient {
     // #3062 — Optional rhetorical-style steering (preset and/or free-form).
     if (style) body['style'] = style;
     if (styleNotes) body['styleNotes'] = styleNotes;
+    // #3111 — Optional per-generation coach override (server resolves tolerantly).
+    if (coachKey) body['coachKey'] = coachKey;
+    // #3115 — Persist coachKey as defaultCoach after successful generation.
+    if (setAsDefault) body['setAsDefault'] = true;
     return this.requestWithRateMeta<GenerateResult>('POST', '/affirmations/generate', body);
   }
 
@@ -932,6 +957,15 @@ export class UserApiClient {
   async checkUsername(username: string): Promise<{ available: boolean; suggestion?: string; error?: string }> {
     const qs = encodeURIComponent(username);
     return this.request('GET', `/auth/username/available?username=${qs}`);
+  }
+
+  // --- Coaches (#3116) ---
+
+  /**
+   * List all coaches (GET /coaches). Returns 404 when the coaches flag is off.
+   */
+  async getCoaches(): Promise<{ coaches: CoachDto[] }> {
+    return this.request('GET', '/coaches');
   }
 
   // --- Affirmation feedback & toggle (#2209) ---

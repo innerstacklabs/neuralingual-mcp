@@ -478,6 +478,11 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       // over-bounds, or injection → 400).
       const style = params['style'] as string | undefined;
       const styleNotes = params['styleNotes'] as Record<string, unknown> | undefined;
+      // #3111 — Optional per-generation coach override. Resolved tolerantly
+      // server-side (unknown/stale → falls back to defaultCoach, no error).
+      const coachKey = params['coachKey'] as string | undefined;
+      // #3115 — Persist coachKey as defaultCoach after successful generation.
+      const setAsDefault = params['setAsDefault'] as boolean | undefined;
 
       if (!text && !sourceText && !sourceUrl && !sourcePdf && !sourceYoutube) {
         return errorResult('Please provide intent text, source material (sourceText, sourceUrl, sourcePdf, or sourceYoutube), or both.');
@@ -568,7 +573,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         }
       }
 
-      const result = await client.createAndGenerate(text, tone, source, style, styleNotes);
+      const result = await client.createAndGenerate(text, tone, source, style, styleNotes, coachKey, setAsDefault);
       const output = youtubePreview
         ? { ...result, youtubePreview }
         : result;
@@ -1110,6 +1115,81 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(result, null, 2));
     });
   },
+
+  // ── #3116 — Coach catalog tools ──────────────────────────────────────────
+
+  coaches: async () =>
+    withClient(async (client) => {
+      let coaches;
+      try {
+        const result = await client.getCoaches();
+        coaches = result.coaches;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('404') || msg.includes('Not found')) {
+          return textResult('The coaches feature is not enabled for your account. Contact support or wait for the feature rollout.');
+        }
+        throw err;
+      }
+
+      // Fetch user's defaultCoach to mark active coach.
+      let defaultCoach: string | null = null;
+      try {
+        const me = await client.getMe();
+        defaultCoach = me.user.defaultCoach;
+      } catch {
+        // Non-fatal — still show coaches without the default marker.
+      }
+
+      // Return full coach data as JSON with defaultCoach marker.
+      const output = {
+        defaultCoach,
+        coaches: coaches.map((c) => ({
+          ...c,
+          isDefault: c.key === defaultCoach,
+        })),
+      };
+      return textResult(JSON.stringify(output, null, 2));
+    }),
+
+  coachView: async (params) =>
+    withClient(async (client) => {
+      const key = params['key'] as string;
+      if (!key) {
+        return errorResult('Please provide a coach key (e.g. "commander", "mentor", "mystic").');
+      }
+
+      let coaches;
+      try {
+        const result = await client.getCoaches();
+        coaches = result.coaches;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('404') || msg.includes('Not found')) {
+          return textResult('The coaches feature is not enabled for your account. Contact support or wait for the feature rollout.');
+        }
+        throw err;
+      }
+
+      const coach = coaches.find((c) => c.key === key);
+      if (!coach) {
+        const validKeys = coaches.map((c) => c.key).join(', ');
+        return errorResult(`Unknown coach key "${key}". Valid keys: ${validKeys}`);
+      }
+
+      // Fetch user's defaultCoach to show if this is the current default.
+      let isDefault = false;
+      try {
+        const me = await client.getMe();
+        isDefault = me.user.defaultCoach === key;
+      } catch {
+        // Non-fatal.
+      }
+
+      // Return full coach data as JSON with isDefault marker.
+      const output = { ...coach, isDefault };
+      return textResult(JSON.stringify(output, null, 2));
+    }),
 };
 
 // ── Manifest types ────────────────────────────────────────────────────────
