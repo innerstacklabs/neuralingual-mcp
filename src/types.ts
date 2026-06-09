@@ -280,3 +280,17 @@ export interface Voice {
   contexts: SessionContext[];
 }
 
+export interface CreateVoiceInput {
+  externalId: string;
+  displayName: string;
+  description: string;
+  gender: string;
+  accent: string;
+  tier?: string;
+  category?: string;
+  contexts?: SessionContext[];
+  sortOrder?: number;
+  enabled?: boolean;
+  tags?: { ageGroup: string; styles: string[]; qualities: string[] };
+}
+
