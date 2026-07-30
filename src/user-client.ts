@@ -232,6 +232,27 @@ function parseRateLimitMeta(headers: Headers): RateLimitMeta | undefined {
 }
 
 /**
+ * Extract a human-readable message from the global Zod-error response shape
+ * `{ error: 'Invalid request', details: [{ path, message }, ...] }` (see
+ * apps/api/src/server.ts's `setErrorHandler` and lib/parse-or-400.ts). Before
+ * #39, `buildHttpError` only read `data.error` — the generic "Invalid
+ * request" string — so any validation failure (e.g. the affirmation-count
+ * ceiling) surfaced as a bare "HTTP 400: Invalid request" with no indication
+ * of which field or limit was violated. Joins all detail messages so
+ * multi-issue responses aren't truncated to the first one.
+ */
+function extractValidationDetailMessage(data: Record<string, unknown> | null): string | undefined {
+  const details = data?.['details'];
+  if (!Array.isArray(details)) return undefined;
+  const messages: string[] = [];
+  for (const detail of details) {
+    const message = detail && typeof detail === 'object' ? (detail as { message?: unknown }).message : undefined;
+    if (typeof message === 'string') messages.push(message);
+  }
+  return messages.length > 0 ? messages.join('; ') : undefined;
+}
+
+/**
  * Parse retry-after timing from a 429 response. Precedence:
  *   1. `Retry-After` header (RFC 9110 preferred — seconds, or HTTP-date)
  *   2. Body `retryAfterMs` (#855 structured 429)
@@ -299,6 +320,18 @@ function parse429Timing(
   }
   // No signal — default to 60s.
   return { resetAt: null, retryAfterMs: 60_000 };
+}
+
+/**
+ * Derive a playlist title from intent text when no explicit title is given.
+ * `createManualIntentInputSchema` (packages/core) caps `title` at 120 chars,
+ * so this truncates to match. Shared by the `nl_playlist_create` affirmations
+ * path (user-mcp.ts) and the CLI's `set apply`-from-scratch manual-create
+ * path (cli.ts's `createSetFromFileUser`) — both call `createManualIntent`
+ * with a title that falls back to the intent text when the caller omits one.
+ */
+export function deriveTitleFromText(text: string): string {
+  return text.slice(0, 120);
 }
 
 /**
@@ -414,12 +447,24 @@ export class UserApiClient {
       );
     }
     // #1179 — Include HTTP status in non-429 errors. Prefer body.message
-    // (human-readable) over body.error (machine code).
+    // (human-readable), then the structured validation `details` the global
+    // Zod error handler attaches (#39 — surfacing this is what turns a bare
+    // "HTTP 400: Invalid request" into e.g. "HTTP 400: Maximum 65
+    // affirmations allowed (received 70)"), then body.error (machine code)
+    // as a last resort.
     const bodyMsg =
       (data && typeof data['message'] === 'string' && (data['message'] as string)) ||
+      extractValidationDetailMessage(data) ||
       (data && typeof data['error'] === 'string' && (data['error'] as string)) ||
       undefined;
-    const errMsg = bodyMsg ? `HTTP ${res.status}: ${bodyMsg}` : `HTTP ${res.status}`;
+    let errMsg = bodyMsg ? `HTTP ${res.status}: ${bodyMsg}` : `HTTP ${res.status}`;
+    // #41 — Any 401 reaching this point (fetchWithRefresh already gave the
+    // one-shot token refresh a chance) is unrecoverable client-side without a
+    // fresh login. Name the fix instead of leaving the human to guess it from
+    // a bare "Invalid or expired token".
+    if (res.status === 401) {
+      errMsg += ' — Run `neuralingual login` to re-authenticate.';
+    }
     const { code, retryable } = classifyStatus(res.status);
     return new McpError({ code, message: errMsg, status: res.status, retryable });
   }
