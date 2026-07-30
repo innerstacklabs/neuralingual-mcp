@@ -65,7 +65,7 @@
     },
     {
       "name": "nl_sync_affirmations",
-      "description": "Declarative edit of affirmations in a playlist. Provide the complete desired list — affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them. Use this when you only need to change affirmations via a JSON array. Use nl_playlist_import instead when you need to update the whole playlist (title, emoji, render config, AND affirmations) from a single YAML document.",
+      "description": "Declarative edit of affirmations in a playlist. Provide the complete desired list \u2014 affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them. Use this when you only need to change affirmations via a JSON array. Use nl_playlist_import instead when you need to update the whole playlist (title, emoji, render config, AND affirmations) from a single YAML document.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -402,7 +402,7 @@
     },
     {
       "name": "nl_guide",
-      "description": "Render the framework (methodology, principles, sources, groupings, practical application, takeaway) for a playlist as markdown. Returns a clean fallback message for legacy sets that do not carry a framework — never errors on missing framework.",
+      "description": "Render the framework (methodology, principles, sources, groupings, practical application, takeaway) for a playlist as markdown. Returns a clean fallback message for legacy sets that do not carry a framework \u2014 never errors on missing framework.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -631,7 +631,7 @@
     },
     {
       "name": "nl_affirmations_feedback",
-      "description": "Set feedback (like or dislike) on one or more affirmations in a playlist. Supports batch: provide multiple affirmation IDs. Uses continue-on-error — partial failures are reported per-affirmation. Use null feedback to clear.",
+      "description": "Set feedback (like or dislike) on one or more affirmations in a playlist. Supports batch: provide multiple affirmation IDs. Uses continue-on-error \u2014 partial failures are reported per-affirmation. Use null feedback to clear.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -727,7 +727,7 @@
     },
     {
       "name": "nl_context_settings_list",
-      "description": "List all per-context default settings (voice, duration, binaural, pace, background, etc.). Returns customized contexts only — contexts not listed use system defaults.",
+      "description": "List all per-context default settings (voice, duration, binaural, pace, background, etc.). Returns customized contexts only \u2014 contexts not listed use system defaults.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -1373,7 +1373,7 @@
     },
     {
       "name": "nl_playlist_create",
-      "description": "Create a new playlist. Provide intent text, source material (from a book, article, PDF, etc.), your own affirmations, or a combination. When source is provided, AI generates affirmations grounded in that material — costs 1 credit. When affirmations is provided, the playlist is created directly from your text with NO generation and NO credit charge (source/style/styleNotes/coachKey/setAsDefault are ignored in this mode).",
+      "description": "Create a new playlist. Provide intent text, source material (from a book, article, PDF, etc.), your own affirmations, or a combination. When source is provided, AI generates affirmations grounded in that material \u2014 costs 1 credit. When affirmations is provided, the playlist is created directly from your text with NO generation and NO credit charge (source/style/styleNotes/coachKey/setAsDefault are ignored in this mode).",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1387,7 +1387,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 120,
-            "description": "Playlist title. Only used when affirmations is provided (the manual-creation path) — ignored during AI generation, where the title is derived from the generated content. Defaults to the first 120 characters of text when omitted."
+            "description": "Playlist title. Only used when affirmations is provided (the manual-creation path) \u2014 ignored during AI generation, where the title is derived from the generated content. Defaults to the first 120 characters of text when omitted."
           },
           "tone": {
             "type": "string",
@@ -1444,7 +1444,7 @@
               "commander",
               "meaning_maker"
             ],
-            "description": "Named style archetype to steer the writing style (rhetorical cadence only — no quotes or impersonation). Choose one: 'aphorist' — The Aphorist: short, paradoxical, declarative wisdom; 'minimalist' — The Minimalist: four-to-seven-word verdicts, pure mantra (good when output feels too elaborate); 'plainspoken' — The Plainspoken: warm, concrete, everyday language; 'mentor' — The Mentor: generous, encouraging, you-centered; 'contemplative' — The Contemplative: serene, spacious, compassionate (good for winding down); 'stoic' — The Stoic: terse, duty- and control-framed maxims; 'lyricist' — The Lyricist: rhythmic and dignified, rising cadence; 'mystic' — The Mystic: poetic, metaphor-rich, paradoxical (the most elaborate option); 'visionary' — The Visionary: bold, taste-driven, excellence-obsessed; 'sage' — The Sage: folksy, patient, value-over-hype; 'commander' — The Commander: disciplined ownership and calm authority (demanding, never degrading); 'meaning_maker' — The Meaning-Maker: dignified, purpose-centered, meaning-in-hardship. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
+            "description": "Named style archetype to steer the writing style (rhetorical cadence only \u2014 no quotes or impersonation). Choose one: 'aphorist' \u2014 The Aphorist: short, paradoxical, declarative wisdom; 'minimalist' \u2014 The Minimalist: four-to-seven-word verdicts, pure mantra (good when output feels too elaborate); 'plainspoken' \u2014 The Plainspoken: warm, concrete, everyday language; 'mentor' \u2014 The Mentor: generous, encouraging, you-centered; 'contemplative' \u2014 The Contemplative: serene, spacious, compassionate (good for winding down); 'stoic' \u2014 The Stoic: terse, duty- and control-framed maxims; 'lyricist' \u2014 The Lyricist: rhythmic and dignified, rising cadence; 'mystic' \u2014 The Mystic: poetic, metaphor-rich, paradoxical (the most elaborate option); 'visionary' \u2014 The Visionary: bold, taste-driven, excellence-obsessed; 'sage' \u2014 The Sage: folksy, patient, value-over-hype; 'commander' \u2014 The Commander: disciplined ownership and calm authority (demanding, never degrading); 'meaning_maker' \u2014 The Meaning-Maker: dignified, purpose-centered, meaning-in-hardship. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
             "note": "Ignored when affirmations is provided."
           },
           "styleNotes": {
@@ -1468,7 +1468,7 @@
               "commander",
               "meaning_maker"
             ],
-            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. Unknown keys are ignored (falls back to your default coach). Not saved — affects this generation only. Ignored when affirmations is provided."
+            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. Unknown keys are ignored (falls back to your default coach). Not saved \u2014 affects this generation only. Ignored when affirmations is provided."
           },
           "setAsDefault": {
             "type": "boolean",
@@ -1483,7 +1483,15 @@
               "minLength": 1,
               "maxLength": 240
             },
-            "description": "Your own affirmation texts (1-240 chars each, max 45 total). When provided, the playlist is created directly from these — skips AI generation and the credit charge entirely. Requires text (used as the playlist's intent). Any sourceText/sourceUrl/sourcePdf/sourceYoutube/style/styleNotes/coachKey/setAsDefault are ignored (they only affect AI generation)."
+            "description": "Your own affirmation texts (1-240 chars each, max 45 total). When provided, the playlist is created directly from these \u2014 skips AI generation and the credit charge entirely. Requires text (used as the playlist's intent). Any sourceText/sourceUrl/sourcePdf/sourceYoutube/style/styleNotes/coachKey/setAsDefault are ignored (they only affect AI generation)."
+          },
+          "voicePerspective": {
+            "type": "string",
+            "enum": [
+              "first_person",
+              "second_person"
+            ],
+            "description": "Grammatical perspective for the affirmations. 'first_person' = self-talk (\"I am focused\"); 'second_person' = coach voice (\"You are focused\"). Only meaningful together with affirmations[] \u2014 set it to match the voice you actually wrote in, otherwise the stored perspective may not match your text."
           }
         },
         "additionalProperties": false
@@ -1492,7 +1500,7 @@
         "method": "POST",
         "path": "/affirmations/generate",
         "auth": "jwt",
-        "note": "When affirmations is provided, routes to POST /intents/manual instead — no generation, no credit charge."
+        "note": "When affirmations is provided, routes to POST /intents/manual instead \u2014 no generation, no credit charge."
       },
       "handler": {
         "type": "custom",
@@ -1586,7 +1594,7 @@
     },
     {
       "name": "nl_playlist_export",
-      "description": "Export a playlist as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_playlist_import. With withFramework=true, prepends the framework as markdown for human-facing contexts (the combined output is NOT re-importable via nl_playlist_import — apply expects pure YAML).",
+      "description": "Export a playlist as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_playlist_import. With withFramework=true, prepends the framework as markdown for human-facing contexts (the combined output is NOT re-importable via nl_playlist_import \u2014 apply expects pure YAML).",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1618,7 +1626,7 @@
     },
     {
       "name": "nl_playlist_import",
-      "description": "Apply a YAML set file to an existing playlist. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_playlist_export to get the current YAML first, edit it, then import. Use this (not nl_sync_affirmations) when you need to change the WHOLE playlist — title, emoji, render config, AND affirmations — from a single YAML document. Use nl_sync_affirmations instead when you only need to add/update/remove affirmations via a JSON array and don't need to touch title, emoji, or render config.",
+      "description": "Apply a YAML set file to an existing playlist. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_playlist_export to get the current YAML first, edit it, then import. Use this (not nl_sync_affirmations) when you need to change the WHOLE playlist \u2014 title, emoji, render config, AND affirmations \u2014 from a single YAML document. Use nl_sync_affirmations instead when you only need to add/update/remove affirmations via a JSON array and don't need to touch title, emoji, or render config.",
       "parameters": {
         "type": "object",
         "properties": {

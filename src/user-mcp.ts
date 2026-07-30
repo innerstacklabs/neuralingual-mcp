@@ -455,10 +455,17 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         if (!text) {
           return errorResult('Please provide text (the playlist intent) when creating from affirmations.');
         }
+        // #44 — voicePerspective was silently defaulting to first_person on the
+        // manual path: createManualIntentInputSchema accepts it, but this call
+        // never passed it, and there was no tool param to set it. A coach
+        // authoring second-person affirmations ("You train from love") got them
+        // stored as first_person. Generation-path defaults do not apply here.
+        const voicePerspective = params['voicePerspective'] as string | undefined;
         const result = await client.createManualIntent({
           title: title ?? deriveTitleFromText(text),
           rawText: text,
           tonePreference: tone ?? null,
+          ...(voicePerspective ? { voicePerspective } : {}),
           affirmations: affirmations.map((a) => ({ text: a })),
         });
         return textResult(JSON.stringify(result, null, 2));
