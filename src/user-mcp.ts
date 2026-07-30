@@ -408,8 +408,17 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
     }
   },
 
-  create: async (params) =>
-    withClient(async (client) => {
+  create: async (params) => {
+    // Argument validation runs BEFORE client acquisition. `withClient` resolves
+    // auth first, so a guard placed inside it reports "Not logged in" for what
+    // is actually a missing-argument error — misleading, and it made the test
+    // for this guard pass only on machines that happen to have auth.json
+    // (green locally, red in clean CI).
+    const affirmationsArg = params['affirmations'] as string[] | undefined;
+    if (affirmationsArg && affirmationsArg.length > 0 && !params['text']) {
+      return errorResult('Please provide text (the playlist intent) when creating from affirmations.');
+    }
+    return withClient(async (client) => {
       const text = params['text'] as string | undefined;
       const tone = params['tone'] as string | undefined;
       const sourceText = params['sourceText'] as string | undefined;
@@ -430,8 +439,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const setAsDefault = params['setAsDefault'] as boolean | undefined;
       // #40 — Optional affirmations[]: create the playlist directly from
       // user-authored affirmations, skipping generation and the credit
-      // charge entirely (only reachable via nl_playlist_create — the
-      // deprecated nl_create alias's schema doesn't declare this param).
+      // charge entirely (nl_playlist_create).
       // Consistent with style/styleNotes/coachKey/setAsDefault (all
       // generation-only knobs), any source* params are simply IGNORED here
       // rather than rejected — a caller may legitimately pass along the
@@ -441,6 +449,9 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const title = params['title'] as string | undefined;
 
       if (affirmations && affirmations.length > 0) {
+        // Unreachable in practice — the same condition is checked before
+        // withClient above (so a missing arg isn't reported as an auth
+        // error). Retained for type narrowing and defence in depth.
         if (!text) {
           return errorResult('Please provide text (the playlist intent) when creating from affirmations.');
         }
@@ -547,7 +558,8 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         ? { ...result, youtubePreview }
         : result;
       return textResult(JSON.stringify(output, null, 2));
-    }),
+    });
+  },
 
   syncAffirmations: async (params) =>
     withClient(async (client) => {
