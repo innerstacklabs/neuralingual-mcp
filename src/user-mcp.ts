@@ -13,11 +13,11 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { UserApiClient } from './user-client.js';
+import { UserApiClient, deriveTitleFromText } from './user-client.js';
 import { loadAuth } from './auth-store.js';
 import { serializeSetFile, parseSetFile } from './set-file.js';
 import { jsonSchemaToInputSchema, type JsonSchema } from './json-schema-to-zod.js';
@@ -109,7 +109,7 @@ async function resolveSetAndValidateAffirmations(
     return {
       ok: false,
       error: errorResult(
-        `Affirmation IDs not found in this playlist: ${invalidIds.join(', ')}. Use nl_library_view to see affirmation IDs.`,
+        `Affirmation IDs not found in this playlist: ${invalidIds.join(', ')}. Use nl_playlist_view to see affirmation IDs.`,
       ),
     };
   }
@@ -156,7 +156,7 @@ async function resolveIntentId(client: UserApiClient, shortId: string): Promise<
     );
   }
 
-  throw new Error('Playlist not found. Use nl_library to see available sets.');
+  throw new Error('Playlist not found. Use nl_playlist_list to see available sets.');
 }
 
 /**
@@ -170,7 +170,7 @@ async function fetchSetFileData(
 ): Promise<{ data: SetFileData; framework: unknown }> {
   const { intent } = await client.getIntent(intentId);
   if (!intent) {
-    throw new Error('Playlist not found. Use nl_library to see available sets.');
+    throw new Error('Playlist not found. Use nl_playlist_list to see available sets.');
   }
 
   const latestSet = intent.affirmationSets[0];
@@ -341,67 +341,12 @@ type CustomHandlerFn = (params: Record<string, unknown>) => Promise<{
 }>;
 
 export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
-  library: async () =>
-    withClient(async (client) => {
-      const { items } = await client.getLibrary();
-      const summary = items.map((item) => ({
-        id: item.intent.id,
-        title: item.intent.title,
-        emoji: item.intent.emoji,
-        context: item.intent.sessionContext,
-        affirmationCount: item.latestAffirmationSet?.affirmationCount ?? 0,
-        renderStatus: item.latestRenderJob?.status ?? 'none',
-        updatedAt: item.intent.updatedAt,
-      }));
-      return textResult(JSON.stringify(summary, null, 2));
-    }),
-
-  info: async (params) =>
-    withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
-      const { intent } = await client.getIntent(resolvedId);
-      if (!intent) {
-        return errorResult('Playlist not found. Use nl_library to see available sets.');
-      }
-      // Additive framework surfacing (#749). Spreads existing intent fields
-      // unchanged at the top level, adds three framework-metadata fields
-      // alongside so current consumers keep working. Per #749 acceptance
-      // criteria we must NOT dump the full framework JSON — that's
-      // nl_guide's job. Strip `framework` + raw LLM payloads from each
-      // affirmation set before stringifying to keep this tool lightweight.
-      const latestSet = intent.affirmationSets[0];
-      const framework = latestSet?.framework ?? null;
-      // Strip framework + raw LLM payloads defensively — they may or may not
-      // be present depending on legacy vs framework-first rows. Shallow-copy
-      // each set into a plain object so we don't mutate the client response.
-      const sanitizedAffirmationSets = intent.affirmationSets.map((set) => {
-        const bag: Record<string, unknown> = { ...set };
-        delete bag['framework'];
-        delete bag['rawFrameworkLlm'];
-        delete bag['rawAffirmationsLlm'];
-        return bag;
-      });
-      // Strip sourceText from response — it can be very large (up to 16k
-      // chars) and nl_info should show metadata only. sourceText is still
-      // available via nl_set_export if needed.
-      const intentBag: Record<string, unknown> = { ...intent };
-      delete intentBag['sourceText'];
-      const response = {
-        ...intentBag,
-        affirmationSets: sanitizedAffirmationSets,
-        hasFramework: hasFramework(framework),
-        frameworkSchemaVersion: extractFrameworkSchemaVersion(framework),
-        frameworkTakeaway: extractFrameworkTakeaway(framework),
-      };
-      return textResult(JSON.stringify(response, null, 2));
-    }),
-
   guide: async (params) =>
     withClient(async (client) => {
       const resolvedId = await resolveIntentId(client, params['id'] as string);
       const { intent } = await client.getIntent(resolvedId);
       if (!intent) {
-        return errorResult('Playlist not found. Use nl_library to see available sets.');
+        return errorResult('Playlist not found. Use nl_playlist_list to see available sets.');
       }
       const latestSet = intent.affirmationSets[0];
       const framework = latestSet?.framework ?? null;
@@ -483,9 +428,33 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const coachKey = params['coachKey'] as string | undefined;
       // #3115 — Persist coachKey as defaultCoach after successful generation.
       const setAsDefault = params['setAsDefault'] as boolean | undefined;
+      // #40 — Optional affirmations[]: create the playlist directly from
+      // user-authored affirmations, skipping generation and the credit
+      // charge entirely (only reachable via nl_playlist_create — the
+      // deprecated nl_create alias's schema doesn't declare this param).
+      // Consistent with style/styleNotes/coachKey/setAsDefault (all
+      // generation-only knobs), any source* params are simply IGNORED here
+      // rather than rejected — a caller may legitimately pass along the
+      // source it drew affirmations from for context without wanting
+      // generation to run against it.
+      const affirmations = params['affirmations'] as string[] | undefined;
+      const title = params['title'] as string | undefined;
+
+      if (affirmations && affirmations.length > 0) {
+        if (!text) {
+          return errorResult('Please provide text (the playlist intent) when creating from affirmations.');
+        }
+        const result = await client.createManualIntent({
+          title: title ?? deriveTitleFromText(text),
+          rawText: text,
+          tonePreference: tone ?? null,
+          affirmations: affirmations.map((a) => ({ text: a })),
+        });
+        return textResult(JSON.stringify(result, null, 2));
+      }
 
       if (!text && !sourceText && !sourceUrl && !sourcePdf && !sourceYoutube) {
-        return errorResult('Please provide intent text, source material (sourceText, sourceUrl, sourcePdf, or sourceYoutube), or both.');
+        return errorResult('Please provide intent text, source material (sourceText, sourceUrl, sourcePdf, or sourceYoutube), affirmations, or a combination.');
       }
 
       const sourceFlags = [sourceText, sourceUrl, sourcePdf, sourceYoutube].filter(Boolean);
@@ -580,22 +549,6 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(output, null, 2));
     }),
 
-  rename: async (params) => {
-    const title = params['title'] as string | undefined;
-    const emoji = params['emoji'] as string | null | undefined;
-    if (title === undefined && emoji === undefined) {
-      return errorResult('At least one of title or emoji must be provided.');
-    }
-    return withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
-      const input: { title?: string; emoji?: string | null } = {};
-      if (title !== undefined) input.title = title;
-      if (emoji !== undefined) input.emoji = emoji;
-      const result = await client.updateIntent(resolvedId, input);
-      return textResult(JSON.stringify(result, null, 2));
-    });
-  },
-
   syncAffirmations: async (params) =>
     withClient(async (client) => {
       const resolvedId = await resolveIntentId(client, params['id'] as string);
@@ -644,7 +597,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         }
       }
       if (!item) {
-        return errorResult('Playlist not found. Use nl_library to see available sets.');
+        return errorResult('Playlist not found. Use nl_playlist_list to see available sets.');
       }
       const renderJob = item.latestRenderJob;
       if (!renderJob?.id) {
@@ -699,7 +652,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
 
       // Prepend framework markdown before the YAML body. Blank-line separator
       // (no standalone `---`) avoids colliding with YAML's document-start
-      // marker. The combined output is NOT re-importable via nl_set_import
+      // marker. The combined output is NOT re-importable via nl_playlist_import
       // — that's documented in the tool description.
       const markdown = renderFrameworkMarkdown(framework);
       return textResult(`${markdown}\n${yaml}`);
@@ -841,7 +794,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const resolvedId = await resolveIntentId(client, params['id'] as string);
       const { intent, stats } = await client.getIntent(resolvedId);
       if (!intent) {
-        return errorResult('Playlist not found. Use nl_library_list to see available sets.');
+        return errorResult('Playlist not found. Use nl_playlist_list to see available sets.');
       }
       const latestSet = intent.affirmationSets[0];
       const affirmations = (latestSet?.affirmations ?? []).map((a) => ({
@@ -855,17 +808,26 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         ? intent.renderConfigs.find((rc) => rc.affirmationSetId === latestSet.id)
         : intent.renderConfigs[0] ?? null;
       const latestRenderJob = latestConfig?.renderJobs?.[0] ?? null;
+      // Framework surfacing (#749, carried over from the deleted nl_info tool
+      // — this is now the only user-facing tool exposing these fields). Per
+      // #749 acceptance criteria we must NOT dump the full framework JSON —
+      // that's nl_guide's job — so only the lightweight metadata surfaces.
+      const framework = latestSet?.framework ?? null;
 
       const response = {
         id: intent.id,
         title: intent.title,
         emoji: intent.emoji,
+        rawText: intent.rawText,
         context: intent.sessionContext,
         tonePreference: intent.tonePreference,
         affirmationCount: affirmations.length,
         affirmations,
         renderStatus: latestRenderJob?.status ?? 'none',
         renderProgress: latestRenderJob?.progress ?? 0,
+        hasFramework: hasFramework(framework),
+        frameworkSchemaVersion: extractFrameworkSchemaVersion(framework),
+        frameworkTakeaway: extractFrameworkTakeaway(framework),
         stats: stats ?? null,
         createdAt: intent.createdAt,
         updatedAt: intent.updatedAt,
@@ -1348,10 +1310,24 @@ async function main() {
   await server.connect(transport);
 }
 
-// Only run when executed directly (not when imported in tests)
-const isMainModule =
-  import.meta.url === `file://${process.argv[1]}` ||
-  process.argv[1]?.endsWith('/user-mcp.js');
+// Only run when executed directly (not when imported in tests). Compare
+// resolved real paths rather than raw strings: when invoked through an npm
+// bin symlink (e.g. `/opt/homebrew/bin/neuralingual-mcp` -> this file),
+// `process.argv[1]` is the symlink path, which neither equals the resolved
+// `import.meta.url` nor ends with `/user-mcp.js` (the bin can be named
+// anything) — silently skipping `main()` and exiting 0 with no output (#38).
+// `realpathSync` resolves the symlink to compare like-for-like; guarded so a
+// missing/odd argv[1] can never crash startup.
+function resolveMainModuleEntry(argv1: string | undefined): string {
+  if (!argv1) return '';
+  try {
+    return realpathSync(argv1);
+  } catch {
+    return '';
+  }
+}
+
+const isMainModule = resolveMainModuleEntry(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMainModule) {
   main().catch((err) => {

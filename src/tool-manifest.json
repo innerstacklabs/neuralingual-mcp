@@ -4,24 +4,6 @@
   "description": "Neuralingual user-facing MCP tool definitions. Single source of truth for tool names, descriptions, parameters, and handler routing.",
   "tools": [
     {
-      "name": "nl_library",
-      "description": "List all playlists in the user's library. Returns title, emoji, context, affirmation count, and render status for each playlist.",
-      "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "GET",
-        "path": "/library",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "library"
-      }
-    },
-    {
       "name": "nl_search",
       "description": "Search playlists in the library by keyword. Matches against title, emoji, and session context.",
       "parameters": {
@@ -47,33 +29,6 @@
       "handler": {
         "type": "custom",
         "customHandler": "search"
-      }
-    },
-    {
-      "name": "nl_info",
-      "description": "Get detailed information about a playlist, including all affirmations, render config, and share status. Accepts full or short ID.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Playlist ID (full or short prefix)"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "GET",
-        "path": "/intents/{id}",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "info"
       }
     },
     {
@@ -109,157 +64,8 @@
       }
     },
     {
-      "name": "nl_create",
-      "description": "Create a new playlist. Provide intent text, source material (from a book, article, PDF, etc.), or both. When source is provided, AI generates affirmations grounded in that material. Costs 1 credit.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "text": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500,
-            "description": "Intent text describing what you want to practice (e.g. \"I am confident and capable\"). Optional when sourceText is provided."
-          },
-          "tone": {
-            "type": "string",
-            "enum": [
-              "grounded",
-              "open",
-              "mystical"
-            ],
-            "description": "Tone preference: grounded (default), open, or mystical"
-          },
-          "sourceText": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 16000,
-            "description": "Source material text (from a book, article, podcast transcript, etc.). When provided, affirmations are generated grounded in this material. Intent text becomes optional."
-          },
-          "sourceTitle": {
-            "type": "string",
-            "maxLength": 200,
-            "description": "Title of the source material (e.g. book title, article headline)"
-          },
-          "sourceAuthor": {
-            "type": "string",
-            "maxLength": 200,
-            "description": "Author of the source material"
-          },
-          "sourceUrl": {
-            "type": "string",
-            "format": "uri",
-            "description": "URL of a web article. Server extracts the article text automatically. Mutually exclusive with sourceText and sourcePdf."
-          },
-          "sourcePdf": {
-            "type": "string",
-            "description": "Absolute file path to a PDF document. Server extracts text automatically. Max 10 MB, 20 pages. Mutually exclusive with sourceText, sourceUrl, and sourceYoutube."
-          },
-          "sourceYoutube": {
-            "type": "string",
-            "format": "uri",
-            "description": "YouTube video URL. Server extracts the transcript (captions) automatically. Mutually exclusive with sourceText, sourceUrl, and sourcePdf."
-          },
-          "style": {
-            "type": "string",
-            "enum": [
-              "aphorist",
-              "minimalist",
-              "plainspoken",
-              "mentor",
-              "contemplative",
-              "stoic",
-              "lyricist",
-              "mystic",
-              "visionary",
-              "sage",
-              "commander",
-              "meaning_maker"
-            ],
-            "description": "Named style archetype to steer the writing style (rhetorical cadence only — no quotes or impersonation). Choose one: 'aphorist' — The Aphorist: short, paradoxical, declarative wisdom; 'minimalist' — The Minimalist: four-to-seven-word verdicts, pure mantra (good when output feels too elaborate); 'plainspoken' — The Plainspoken: warm, concrete, everyday language; 'mentor' — The Mentor: generous, encouraging, you-centered; 'contemplative' — The Contemplative: serene, spacious, compassionate (good for winding down); 'stoic' — The Stoic: terse, duty- and control-framed maxims; 'lyricist' — The Lyricist: rhythmic and dignified, rising cadence; 'mystic' — The Mystic: poetic, metaphor-rich, paradoxical (the most elaborate option); 'visionary' — The Visionary: bold, taste-driven, excellence-obsessed; 'sage' — The Sage: folksy, patient, value-over-hype; 'commander' — The Commander: disciplined ownership and calm authority (demanding, never degrading); 'meaning_maker' — The Meaning-Maker: dignified, purpose-centered, meaning-in-hardship. Combine with styleNotes to override individual dials."
-          },
-          "styleNotes": {
-            "type": "object",
-            "description": "Free-form rhetorical-style dials to fine-tune the writing style. Recognized keys: sentenceLength, ideaDensity, paradox, directness, register, structurePatterns (each a short phrase). When combined with 'style', these keys override the preset. Each value max 200 chars.",
-            "additionalProperties": true
-          },
-          "coachKey": {
-            "type": "string",
-            "enum": [
-              "aphorist",
-              "minimalist",
-              "plainspoken",
-              "mentor",
-              "contemplative",
-              "stoic",
-              "lyricist",
-              "mystic",
-              "visionary",
-              "sage",
-              "commander",
-              "meaning_maker"
-            ],
-            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. Unknown keys are ignored (falls back to your default coach). Not saved — affects this generation only."
-          },
-          "setAsDefault": {
-            "type": "boolean",
-            "description": "When true AND coachKey is provided AND coaches feature is enabled: persist the coachKey as your new default coach after successful generation. Ignored when coachKey is absent, feature is off, or generation fails."
-          }
-        },
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "POST",
-        "path": "/affirmations/generate",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "create"
-      }
-    },
-    {
-      "name": "nl_rename",
-      "description": "Update the title and/or emoji of a playlist. At least one of title or emoji must be provided.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Playlist ID (full or short prefix)"
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200,
-            "description": "New title"
-          },
-          "emoji": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "New emoji (or null to clear)"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "PATCH",
-        "path": "/intents/{id}",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "rename"
-      }
-    },
-    {
       "name": "nl_sync_affirmations",
-      "description": "Declarative edit of affirmations in a playlist. Provide the complete desired list \u2014 affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them.",
+      "description": "Declarative edit of affirmations in a playlist. Provide the complete desired list — affirmations not in the list are removed, new ones are added, existing ones are updated. Each affirmation needs text and enabled status. Include id for existing affirmations to preserve them. Use this when you only need to change affirmations via a JSON array. Use nl_playlist_import instead when you need to update the whole playlist (title, emoji, render config, AND affirmations) from a single YAML document.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -311,36 +117,6 @@
       "handler": {
         "type": "custom",
         "customHandler": "syncAffirmations"
-      }
-    },
-    {
-      "name": "nl_delete",
-      "description": "Delete a playlist permanently. This cannot be undone.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Playlist ID (full or short prefix)"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "DELETE",
-        "path": "/intents/{id}",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "client-method",
-        "clientMethod": "deleteIntent",
-        "resolveId": true,
-        "responseFormat": "void",
-        "successMessage": "Deleted playlist {id}."
       }
     },
     {
@@ -587,7 +363,9 @@
             "description": "Practice set ID (full or short prefix)"
           }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
@@ -624,7 +402,7 @@
     },
     {
       "name": "nl_guide",
-      "description": "Render the framework (methodology, principles, sources, groupings, practical application, takeaway) for a playlist as markdown. Returns a clean fallback message for legacy sets that do not carry a framework \u2014 never errors on missing framework.",
+      "description": "Render the framework (methodology, principles, sources, groupings, practical application, takeaway) for a playlist as markdown. Returns a clean fallback message for legacy sets that do not carry a framework — never errors on missing framework.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -648,72 +426,6 @@
       "handler": {
         "type": "custom",
         "customHandler": "guide"
-      }
-    },
-    {
-      "name": "nl_set_export",
-      "description": "Export a playlist as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_set_import. With withFramework=true, prepends the framework as markdown for human-facing contexts (the combined output is NOT re-importable via nl_set_import \u2014 apply expects pure YAML).",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Playlist ID (full or short prefix)"
-          },
-          "withFramework": {
-            "type": "boolean",
-            "description": "When true, prepend the framework as markdown before the YAML body. Default false (pure YAML, re-importable). Legacy sets without a framework render a fallback notice instead of failing."
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "GET",
-        "path": "/intents/{id}",
-        "auth": "jwt",
-        "note": "Fetches intent detail, then serializes to YAML client-side"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "setExport"
-      }
-    },
-    {
-      "name": "nl_set_import",
-      "description": "Apply a YAML set file to an existing playlist. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_set_export to get the current YAML first, edit it, then import.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Playlist ID (full or short prefix)"
-          },
-          "yaml": {
-            "type": "string",
-            "minLength": 1,
-            "description": "YAML content to apply (from nl_set_export, edited)"
-          }
-        },
-        "required": [
-          "id",
-          "yaml"
-        ],
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "PATCH",
-        "path": "/intents/{id}",
-        "auth": "jwt",
-        "note": "Composite operation: PATCH intent + PUT affirmations/sync + PUT render-config"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "setImport"
       }
     },
     {
@@ -891,7 +603,7 @@
     },
     {
       "name": "nl_catalog_copy",
-      "description": "Copy a catalog playlist to the user's library. Creates a full copy including affirmations, render config, and pre-rendered audio. The new playlist appears in nl_library_list immediately.",
+      "description": "Copy a catalog playlist to the user's library. Creates a full copy including affirmations, render config, and pre-rendered audio. The new playlist appears in nl_playlist_list immediately.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -918,54 +630,8 @@
       }
     },
     {
-      "name": "nl_library_list",
-      "description": "List all playlists (playlists) in the user's library with metadata including title, emoji, context, affirmation count, render status, play count, and last played date.",
-      "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "GET",
-        "path": "/library",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "libraryList"
-      }
-    },
-    {
-      "name": "nl_library_view",
-      "description": "View a specific playlist with its affirmations, render status, and play statistics. Shows each affirmation's text, enabled status, and feedback (liked/disliked). Accepts full or short ID.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Playlist ID (full or short prefix)"
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "GET",
-        "path": "/intents/{id}",
-        "auth": "jwt",
-        "note": "Fetches intent detail and formats as playlist view"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "libraryView"
-      }
-    },
-    {
       "name": "nl_affirmations_feedback",
-      "description": "Set feedback (like or dislike) on one or more affirmations in a playlist. Supports batch: provide multiple affirmation IDs. Uses continue-on-error \u2014 partial failures are reported per-affirmation. Use null feedback to clear.",
+      "description": "Set feedback (like or dislike) on one or more affirmations in a playlist. Supports batch: provide multiple affirmation IDs. Uses continue-on-error — partial failures are reported per-affirmation. Use null feedback to clear.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -982,7 +648,7 @@
               "type": "string",
               "minLength": 1
             },
-            "description": "Affirmation IDs to set feedback on (use nl_library_view to find IDs)"
+            "description": "Affirmation IDs to set feedback on (use nl_playlist_view to find IDs)"
           },
           "feedback": {
             "type": [
@@ -1034,7 +700,7 @@
               "type": "string",
               "minLength": 1
             },
-            "description": "Affirmation IDs to toggle (use nl_library_view to find IDs)"
+            "description": "Affirmation IDs to toggle (use nl_playlist_view to find IDs)"
           },
           "isEnabled": {
             "type": "boolean",
@@ -1061,7 +727,7 @@
     },
     {
       "name": "nl_context_settings_list",
-      "description": "List all per-context default settings (voice, duration, binaural, pace, background, etc.). Returns customized contexts only \u2014 contexts not listed use system defaults.",
+      "description": "List all per-context default settings (voice, duration, binaural, pace, background, etc.). Returns customized contexts only — contexts not listed use system defaults.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -1283,7 +949,7 @@
     },
     {
       "name": "nl_source_extract",
-      "description": "Extract text preview from a URL (article, blog post, etc.). Returns title, author, character count, and excerpt. Useful for previewing source material before feeding it into nl_create.",
+      "description": "Extract text preview from a URL (article, blog post, etc.). Returns title, author, character count, and excerpt. Useful for previewing source material before feeding it into nl_playlist_create.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1310,7 +976,7 @@
     },
     {
       "name": "nl_source_youtube",
-      "description": "Extract transcript from a YouTube video URL. Returns title, channel name, character count, and video ID. The transcript can then be used as source material with nl_create.",
+      "description": "Extract transcript from a YouTube video URL. Returns title, channel name, character count, and video ID. The transcript can then be used as source material with nl_playlist_create.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1337,7 +1003,7 @@
     },
     {
       "name": "nl_source_twitter",
-      "description": "Extract thread text from a Twitter/X post URL. Returns the post text, author name, handle, and character count. The text can then be used as source material with nl_create.",
+      "description": "Extract thread text from a Twitter/X post URL. Returns the post text, author name, handle, and character count. The text can then be used as source material with nl_playlist_create.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1364,7 +1030,7 @@
     },
     {
       "name": "nl_source_pdf",
-      "description": "Upload a local PDF file and extract its text content. Returns the extracted text, page count, and character count. The text can then be used as source material with nl_create. Maximum file size is 10 MB.",
+      "description": "Upload a local PDF file and extract its text content. Returns the extracted text, page count, and character count. The text can then be used as source material with nl_playlist_create. Maximum file size is 10 MB.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1542,7 +1208,7 @@
           "affirmationId": {
             "type": "string",
             "minLength": 1,
-            "description": "ID of the affirmation to delete (use nl_library_view to find IDs)"
+            "description": "ID of the affirmation to delete (use nl_playlist_view to find IDs)"
           }
         },
         "required": [
@@ -1563,8 +1229,279 @@
       }
     },
     {
-      "name": "nl_intent_delete",
-      "description": "Delete a playlist (intent) permanently. This cannot be undone. Alias for nl_delete with consistent naming.",
+      "name": "nl_coaches",
+      "description": "List all available coaches with their summaries. Shows key, name, description, inspiredBy, signature voice, default tone, and voice perspective for each coach. Also indicates which coach is your current default. Requires the coaches feature to be enabled.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/coaches",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "coaches"
+      }
+    },
+    {
+      "name": "nl_coach_view",
+      "description": "View full details for a specific coach by key. Returns the coach's name, description, inspiredBy exemplars, signature voice, default tone, voice perspective, and visual metadata. Requires the coaches feature to be enabled.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "aphorist",
+              "minimalist",
+              "plainspoken",
+              "mentor",
+              "contemplative",
+              "stoic",
+              "lyricist",
+              "mystic",
+              "visionary",
+              "sage",
+              "commander",
+              "meaning_maker"
+            ],
+            "description": "The coach key to look up (e.g. 'commander', 'mentor', 'mystic')"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/coaches",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "coachView"
+      }
+    },
+    {
+      "name": "nl_user_settings_update",
+      "description": "Update user profile settings. Set your default coach and/or tone preference. Pass null to clear a setting (defaultCoach=null clears coach, tonePreference=null resets to coach default).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "defaultCoach": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Coach key to set as default (e.g. 'commander', 'mentor'), or null to clear"
+          },
+          "tonePreference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "grounded",
+              "open",
+              "mystical",
+              null
+            ],
+            "description": "Tone preference: 'grounded', 'open', 'mystical', or null to use coach default"
+          }
+        },
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PATCH",
+        "path": "/auth/me",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "userSettingsUpdate"
+      }
+    },
+    {
+      "name": "nl_playlist_list",
+      "description": "List all playlists in the user's library with metadata including title, emoji, context, affirmation count, render status, play count, and last played date.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/library",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "libraryList"
+      }
+    },
+    {
+      "name": "nl_playlist_view",
+      "description": "View a specific playlist with its affirmations, render status, and play statistics. Shows each affirmation's text, enabled status, and feedback (liked/disliked). Accepts full or short ID.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "GET",
+        "path": "/intents/{id}",
+        "auth": "jwt",
+        "note": "Fetches intent detail and formats as playlist view"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "libraryView"
+      }
+    },
+    {
+      "name": "nl_playlist_create",
+      "description": "Create a new playlist. Provide intent text, source material (from a book, article, PDF, etc.), your own affirmations, or a combination. When source is provided, AI generates affirmations grounded in that material — costs 1 credit. When affirmations is provided, the playlist is created directly from your text with NO generation and NO credit charge (source/style/styleNotes/coachKey/setAsDefault are ignored in this mode).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Intent text describing what you want to practice (e.g. \"I am confident and capable\"). Optional when sourceText is provided; required when affirmations is provided (used as the playlist's intent)."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Playlist title. Only used when affirmations is provided (the manual-creation path) — ignored during AI generation, where the title is derived from the generated content. Defaults to the first 120 characters of text when omitted."
+          },
+          "tone": {
+            "type": "string",
+            "enum": [
+              "grounded",
+              "open",
+              "mystical"
+            ],
+            "description": "Tone preference: grounded (default), open, or mystical"
+          },
+          "sourceText": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000,
+            "description": "Source material text (from a book, article, podcast transcript, etc.). When provided, affirmations are generated grounded in this material. Intent text becomes optional. Ignored when affirmations is provided."
+          },
+          "sourceTitle": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Title of the source material (e.g. book title, article headline). Ignored when affirmations is provided."
+          },
+          "sourceAuthor": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Author of the source material. Ignored when affirmations is provided."
+          },
+          "sourceUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of a web article. Server extracts the article text automatically. Mutually exclusive with sourceText and sourcePdf. Ignored when affirmations is provided."
+          },
+          "sourcePdf": {
+            "type": "string",
+            "description": "Absolute file path to a PDF document. Server extracts text automatically. Max 10 MB, 20 pages. Mutually exclusive with sourceText, sourceUrl, and sourceYoutube. Ignored when affirmations is provided."
+          },
+          "sourceYoutube": {
+            "type": "string",
+            "format": "uri",
+            "description": "YouTube video URL. Server extracts the transcript (captions) automatically. Mutually exclusive with sourceText, sourceUrl, and sourcePdf. Ignored when affirmations is provided."
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "aphorist",
+              "minimalist",
+              "plainspoken",
+              "mentor",
+              "contemplative",
+              "stoic",
+              "lyricist",
+              "mystic",
+              "visionary",
+              "sage",
+              "commander",
+              "meaning_maker"
+            ],
+            "description": "Named style archetype to steer the writing style (rhetorical cadence only — no quotes or impersonation). Choose one: 'aphorist' — The Aphorist: short, paradoxical, declarative wisdom; 'minimalist' — The Minimalist: four-to-seven-word verdicts, pure mantra (good when output feels too elaborate); 'plainspoken' — The Plainspoken: warm, concrete, everyday language; 'mentor' — The Mentor: generous, encouraging, you-centered; 'contemplative' — The Contemplative: serene, spacious, compassionate (good for winding down); 'stoic' — The Stoic: terse, duty- and control-framed maxims; 'lyricist' — The Lyricist: rhythmic and dignified, rising cadence; 'mystic' — The Mystic: poetic, metaphor-rich, paradoxical (the most elaborate option); 'visionary' — The Visionary: bold, taste-driven, excellence-obsessed; 'sage' — The Sage: folksy, patient, value-over-hype; 'commander' — The Commander: disciplined ownership and calm authority (demanding, never degrading); 'meaning_maker' — The Meaning-Maker: dignified, purpose-centered, meaning-in-hardship. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
+            "note": "Ignored when affirmations is provided."
+          },
+          "styleNotes": {
+            "type": "object",
+            "description": "Free-form rhetorical-style dials to fine-tune the writing style. Recognized keys: sentenceLength, ideaDensity, paradox, directness, register, structurePatterns (each a short phrase). When combined with 'style', these keys override the preset. Each value max 200 chars. Ignored when affirmations is provided.",
+            "additionalProperties": true
+          },
+          "coachKey": {
+            "type": "string",
+            "enum": [
+              "aphorist",
+              "minimalist",
+              "plainspoken",
+              "mentor",
+              "contemplative",
+              "stoic",
+              "lyricist",
+              "mystic",
+              "visionary",
+              "sage",
+              "commander",
+              "meaning_maker"
+            ],
+            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. Unknown keys are ignored (falls back to your default coach). Not saved — affects this generation only. Ignored when affirmations is provided."
+          },
+          "setAsDefault": {
+            "type": "boolean",
+            "description": "When true AND coachKey is provided AND coaches feature is enabled: persist the coachKey as your new default coach after successful generation. Ignored when coachKey is absent, feature is off, generation fails, or affirmations is provided."
+          },
+          "affirmations": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 45,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "description": "Your own affirmation texts (1-240 chars each, max 45 total). When provided, the playlist is created directly from these — skips AI generation and the credit charge entirely. Requires text (used as the playlist's intent). Any sourceText/sourceUrl/sourcePdf/sourceYoutube/style/styleNotes/coachKey/setAsDefault are ignored (they only affect AI generation)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "POST",
+        "path": "/affirmations/generate",
+        "auth": "jwt",
+        "note": "When affirmations is provided, routes to POST /intents/manual instead — no generation, no credit charge."
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "create"
+      }
+    },
+    {
+      "name": "nl_playlist_delete",
+      "description": "Delete a playlist permanently. This cannot be undone.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1593,7 +1530,7 @@
       }
     },
     {
-      "name": "nl_intent_update",
+      "name": "nl_playlist_update",
       "description": "Update a playlist's intent text, title, emoji, and/or tone preference. At least one field must be provided.",
       "parameters": {
         "type": "object",
@@ -1648,87 +1585,69 @@
       }
     },
     {
-      "name": "nl_coaches",
-      "description": "List all available coaches with their summaries. Shows key, name, description, inspiredBy, signature voice, default tone, and voice perspective for each coach. Also indicates which coach is your current default. Requires the coaches feature to be enabled.",
-      "parameters": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "endpoint": {
-        "method": "GET",
-        "path": "/coaches",
-        "auth": "jwt"
-      },
-      "handler": {
-        "type": "custom",
-        "customHandler": "coaches"
-      }
-    },
-    {
-      "name": "nl_coach_view",
-      "description": "View full details for a specific coach by key. Returns the coach's name, description, inspiredBy exemplars, signature voice, default tone, voice perspective, and visual metadata. Requires the coaches feature to be enabled.",
+      "name": "nl_playlist_export",
+      "description": "Export a playlist as a YAML string. Includes title, emoji, intent text, affirmations, and render config. The YAML can be edited and re-imported with nl_playlist_import. With withFramework=true, prepends the framework as markdown for human-facing contexts (the combined output is NOT re-importable via nl_playlist_import — apply expects pure YAML).",
       "parameters": {
         "type": "object",
         "properties": {
-          "key": {
+          "id": {
             "type": "string",
-            "enum": [
-              "aphorist",
-              "minimalist",
-              "plainspoken",
-              "mentor",
-              "contemplative",
-              "stoic",
-              "lyricist",
-              "mystic",
-              "visionary",
-              "sage",
-              "commander",
-              "meaning_maker"
-            ],
-            "description": "The coach key to look up (e.g. 'commander', 'mentor', 'mystic')"
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
+          },
+          "withFramework": {
+            "type": "boolean",
+            "description": "When true, prepend the framework as markdown before the YAML body. Default false (pure YAML, re-importable). Legacy sets without a framework render a fallback notice instead of failing."
           }
         },
-        "required": ["key"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
         "method": "GET",
-        "path": "/coaches",
-        "auth": "jwt"
+        "path": "/intents/{id}",
+        "auth": "jwt",
+        "note": "Fetches intent detail, then serializes to YAML client-side"
       },
       "handler": {
         "type": "custom",
-        "customHandler": "coachView"
+        "customHandler": "setExport"
       }
     },
     {
-      "name": "nl_user_settings_update",
-      "description": "Update user profile settings. Set your default coach and/or tone preference. Pass null to clear a setting (defaultCoach=null clears coach, tonePreference=null resets to coach default).",
+      "name": "nl_playlist_import",
+      "description": "Apply a YAML set file to an existing playlist. Updates title, emoji, affirmations, and render config based on the YAML content. Use nl_playlist_export to get the current YAML first, edit it, then import. Use this (not nl_sync_affirmations) when you need to change the WHOLE playlist — title, emoji, render config, AND affirmations — from a single YAML document. Use nl_sync_affirmations instead when you only need to add/update/remove affirmations via a JSON array and don't need to touch title, emoji, or render config.",
       "parameters": {
         "type": "object",
         "properties": {
-          "defaultCoach": {
-            "type": ["string", "null"],
-            "description": "Coach key to set as default (e.g. 'commander', 'mentor'), or null to clear"
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Playlist ID (full or short prefix)"
           },
-          "tonePreference": {
-            "type": ["string", "null"],
-            "enum": ["grounded", "open", "mystical", null],
-            "description": "Tone preference: 'grounded', 'open', 'mystical', or null to use coach default"
+          "yaml": {
+            "type": "string",
+            "minLength": 1,
+            "description": "YAML content to apply (from nl_playlist_export, edited)"
           }
         },
+        "required": [
+          "id",
+          "yaml"
+        ],
         "additionalProperties": false
       },
       "endpoint": {
         "method": "PATCH",
-        "path": "/auth/me",
-        "auth": "jwt"
+        "path": "/intents/{id}",
+        "auth": "jwt",
+        "note": "Composite operation: PATCH intent + PUT affirmations/sync + PUT render-config"
       },
       "handler": {
         "type": "custom",
-        "customHandler": "userSettingsUpdate"
+        "customHandler": "setImport"
       }
     }
   ]

@@ -15,7 +15,7 @@ import {
 } from './streaming/generation-stream.js';
 import { StreamRenderer } from './streaming/render.js';
 import type { StreamingProtocolEvent } from './streaming/protocol-types.js';
-import { UserApiClient } from './user-client.js';
+import { UserApiClient, deriveTitleFromText } from './user-client.js';
 import { installEnvTelemetrySink } from './mcp-telemetry.js';
 import { loadAuth, clearAuth } from './auth-store.js';
 import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderConfigInput, RenderStatus, SessionContext, TonePreference } from './types.js';
