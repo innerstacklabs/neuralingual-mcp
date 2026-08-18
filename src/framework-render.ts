@@ -29,7 +29,7 @@ export interface FrameworkLike {
 }
 
 export const NO_FRAMEWORK_MESSAGE =
-  'No framework available for this playlist. Legacy and second-person sets do not carry a framework.';
+  'No framework available for this playlist. Legacy and second-person playlists do not carry a framework.';
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ export function hasFramework(framework: unknown): boolean {
  *   # Framework
  *   ## Methodology
  *   ## Principles
- *   ## Sources
+ *   ## Influences
  *   ## Groupings
  *   ## Terminology          (only when non-empty)
  *   ## Practical Application
@@ -130,7 +130,7 @@ export function renderFrameworkMarkdown(framework: unknown): string {
 
   const sources = asArray(f.sources);
   if (sources.length > 0) {
-    lines.push('## Sources', '');
+    lines.push('## Influences', '');
     for (const entry of sources) {
       if (!entry || typeof entry !== 'object') continue;
       const rec = entry as Record<string, unknown>;

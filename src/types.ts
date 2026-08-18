@@ -136,6 +136,14 @@ export interface UpdateAffirmationsResult {
   updated: number;
 }
 
+/** #132 — result of repairing an affirmation set's authoring coach. */
+export interface SetAffirmationSetCoachResult {
+  affirmationSetId: string;
+  coachKey: string;
+  /** What the field held before, so a mistaken overwrite is visible. */
+  previousCoachKey: string | null;
+}
+
 export interface SyncAffirmationItem {
   id?: string | undefined;
   text: string;
@@ -182,17 +190,22 @@ export interface RenderConfigInput {
   voiceId: string;
   sessionContext: SessionContext;
   durationMinutes: number;
+  durationSeconds?: number | undefined;
   paceWpm?: number | undefined;
+  pauseMsBetweenAffirmations?: number | undefined;
   backgroundAudioPath?: string | null | undefined;
   backgroundVolume?: number | undefined;
+  normalizeLoudness?: boolean | undefined;
   affirmationRepeatCount?: number | undefined;
   includePreamble?: boolean | undefined;
+  preambleText?: string | null | undefined;
+  postambleText?: string | null | undefined;
   playAll?: boolean | undefined;
   repetitionModel?: 'sequential' | 'shuffle' | undefined;
   binauralPreset?: 'theta' | 'alpha' | 'beta' | null | undefined;
-  binauralVolume?: number | undefined;
+  binauralVolume?: number | null | undefined;
   subliminalEnabled?: boolean | undefined;
-  subliminalVolume?: number | undefined;
+  subliminalVolume?: number | null | undefined;
 }
 
 export interface RenderConfig {
@@ -203,9 +216,11 @@ export interface RenderConfig {
   voiceProvider: string;
   sessionContext: SessionContext;
   paceWpm: number;
+  pauseMsBetweenAffirmations: number;
   durationSeconds: number;
   backgroundAudioPath: string | null;
   backgroundVolume: number;
+  normalizeLoudness: boolean;
   affirmationRepeatCount: number;
   repetitionModel: string;
   binauralPreset: string | null;
@@ -213,6 +228,8 @@ export interface RenderConfig {
   subliminalEnabled: boolean;
   subliminalVolume: number | null;
   includePreamble: boolean;
+  preambleText: string | null;
+  postambleText: string | null;
   playAll: boolean;
   createdAt: string;
   updatedAt: string;
@@ -267,6 +284,22 @@ export interface PreambleUpdateInput {
   postamble?: string | null | undefined;
 }
 
+/**
+ * Persisted references to a voice, used to decide whether it can be safely
+ * retired. `total === 0` means nothing points at the voice.
+ *
+ * `total` deliberately over-counts rather than under-counts — it is a safety
+ * signal, not an exact row count.
+ */
+export interface VoiceUsage {
+  renderConfigs: number;
+  userContextSettings: number;
+  generationJobs: number;
+  sharedSnapshots: number;
+  sharedSnapshotConfigs: number;
+  total: number;
+}
+
 export interface Voice {
   id: string;
   externalId: string;
@@ -278,6 +311,8 @@ export interface Voice {
   sortOrder: number;
   enabled: boolean;
   contexts: SessionContext[];
+  /** Present only when the voice list was requested with `includeUsage`. */
+  usage?: VoiceUsage;
 }
 
 export interface CreateVoiceInput {
@@ -292,5 +327,71 @@ export interface CreateVoiceInput {
   sortOrder?: number;
   enabled?: boolean;
   tags?: { ageGroup: string; styles: string[]; qualities: string[] };
+}
+
+/**
+ * Mutable voice metadata. `id` and `externalId` are intentionally absent —
+ * they are identity, and the API rejects them outright.
+ */
+export interface UpdateVoiceInput {
+  displayName?: string;
+  gender?: string;
+  accent?: string;
+  tier?: string;
+  sortOrder?: number;
+}
+
+export interface ListVoicesOptions {
+  context?: SessionContext;
+  /** Attach per-voice reference counts (`Voice.usage`). Off by default. */
+  includeUsage?: boolean;
+}
+
+// --- Coach DTO (#3116) — client-safe wire shape from GET /coaches -----------
+
+export type VoicePerspective = 'first_person' | 'second_person';
+
+/** Presentation assets for a coach. Mirrors `coachVisualDtoSchema` in core. */
+export interface CoachVisualDto {
+  iconRef: string;
+  focalPoint: { x: number; y: number };
+  aspectRatio: number;
+  imagePath: string;
+  thumbPath: string;
+}
+
+/**
+ * Wire DTO for a coach.
+ *
+ * ⚠️ The AUTHORITY for this shape is `coachDtoSchema` in `@neuralingual/core` —
+ * the API validates its response against it. This declaration exists because
+ * the public repo is standalone and cannot resolve a workspace package (#194);
+ * it is not a second source of truth. `coach-dto-parity.test.ts` asserts the
+ * two are structurally identical, so a field added, removed or retyped in core
+ * fails `pnpm typecheck` here rather than at publish time.
+ *
+ * ⛔ `key` is `string`, NOT the `CoachKey` union — deliberately. Copying
+ * core's `z.enum(['commander','mentor','meaning_maker','mystic'])` would
+ * hand-maintain the coach roster in the published package, which is exactly
+ * the defect #183 removed (the shipped schema advertised eight coaches #44 had
+ * already cut). `tool-manifest.json` carries the ONE generated, byte-identical-
+ * tested copy of the roster; nothing else in the public package may.
+ */
+export interface CoachDto {
+  key: string;
+  name: string;
+  roleLabel: string;
+  tagline: string;
+  stance: string;
+  bestFor: string[];
+  identityKit: { keywords: string[]; signaturePhrase: string };
+  description: string;
+  inspiredBy: string[];
+  visual: CoachVisualDto;
+  signatureVoiceId: string;
+  defaultTone: TonePreference;
+  voicePerspective: VoicePerspective;
+  frameworkInfluence: string;
+  styleInfluence: string;
 }
 
