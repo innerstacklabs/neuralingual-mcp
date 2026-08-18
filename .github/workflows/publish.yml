@@ -21,6 +21,32 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      # BEFORE the irreversible step, not after it. The workflow triggers on any
+      # `v*`, and nothing tied the tag to package.json: tag v0.9.4 against a
+      # package.json reading 0.9.3 publishes 0.9.3, and verification then hunts
+      # for a 0.9.4 that will never exist — a correct failure on the wrong side
+      # of a publish that cannot be undone.
+      - name: Tag must match package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p 'require("./package.json").version')"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag v$TAG does not match package.json $PKG — refusing to publish."
+            exit 1
+          fi
+          echo "tag v$TAG matches package.json"
+
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # A green `npm publish` is not evidence that the registry serves the right
+      # package — it has printed "Publishing to registry.npmjs.org" and failed on
+      # the next line. This reads the artifact back and diffs it against the
+      # dist/ this job just built. Without it, the Action's tick meant only
+      # "publish exited 0", and GitLab #183 (the published package advertising
+      # eight coaches that no longer exist) reached users unnoticed.
+      - name: Verify the published package against the registry
+        run: node scripts/verify-published.mjs
+        env:
+          EXPECTED_VERSION: ${{ github.ref_name }}
