@@ -24,3 +24,14 @@ jobs:
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # A green `npm publish` is not evidence that the registry serves the right
+      # package — it has printed "Publishing to registry.npmjs.org" and failed on
+      # the next line. This reads the artifact back and diffs it against the
+      # dist/ this job just built. Without it, the Action's tick meant only
+      # "publish exited 0", and GitLab #183 (the published package advertising
+      # eight coaches that no longer exist) reached users unnoticed.
+      - name: Verify the published package against the registry
+        run: node scripts/verify-published.mjs
+        env:
+          EXPECTED_VERSION: ${{ github.ref_name }}
