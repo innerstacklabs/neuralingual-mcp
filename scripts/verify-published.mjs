@@ -32,30 +32,56 @@ const expected = (process.env.EXPECTED_VERSION || pkg.version).replace(/^v/, '')
 const die = (m) => { console.error(`[verify] ${m}`); process.exit(1); };
 const say = (m) => console.log(`[verify] ${m}`);
 
+// ⛔ EVERY registry read below is retried, and that is not belt-and-braces.
+//
+// This step runs AFTER `npm publish`. The version is already public and npm
+// versions are immutable, so re-running the workflow dies at `npm publish` with
+// EPUBLISHCONFLICT and never reaches this check again. A spurious failure here
+// therefore reds a release that shipped perfectly, PERMANENTLY.
+//
+// The first cut of this script retried `npm view` ten times and then fetched the
+// tarball exactly once — but registry METADATA goes live before the CDN tarball
+// path is reliably warm, so the unretried call was precisely the one most likely
+// to lose the race. False negatives are the expensive direction here; slowness
+// is not.
+const retry = (label, fn, attempts = 10, waitS = 10) => {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const out = fn();
+      if (out) return out;
+    } catch { /* fall through to the wait */ }
+    if (i === attempts) break;            // no pointless sleep after the last try
+    say(`${label} not ready (attempt ${i}/${attempts}) — waiting ${waitS}s`);
+    execFileSync('sleep', [String(waitS)]);
+  }
+  return '';
+};
+
 // 1. Registry propagation is not instant. Poll, rather than fail on a race.
-let live = '';
-for (let i = 1; i <= 10; i++) {
-  try {
-    live = execFileSync('npm', ['view', `${name}@${expected}`, 'version'], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-  } catch { live = ''; }
-  if (live) break;
-  say(`registry has not caught up yet (attempt ${i}/10) — waiting 10s`);
-  execFileSync('sleep', ['10']);
-}
-if (!live) die(`${name}@${expected} is NOT on the registry after 100s. The publish did not take effect.`);
+const live = retry('registry metadata', () =>
+  execFileSync('npm', ['view', `${name}@${expected}`, 'version'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim());
+if (!live) die(`${name}@${expected} is NOT on the registry after ~90s. The publish did not take effect.`);
 if (live !== expected) die(`registry reports ${live}, expected ${expected}.`);
 say(`registry serves ${name}@${live}`);
 
 // 2. Fetch the actual published artifact — not the local tree, the tarball a
 //    user's `npm install` would get.
 const dir = mkdtempSync(join(tmpdir(), 'verify-'));
+// --prefer-online because npm may serve this from the local _cacache, and a
+// cache hit could compare a locally-produced artifact against itself — a check
+// that verifies nothing while reporting success.
 // stderr ignored: `npm pack` writes a 60-line tarball-contents notice there,
 // which would bury this check's actual verdict in the Action log.
-const tgz = execFileSync('npm', ['pack', `${name}@${expected}`, '--pack-destination', dir], {
-  encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-}).trim().split('\n').pop();
+const tgz = retry('published tarball', () =>
+  execFileSync('npm', ['pack', `${name}@${expected}`, '--prefer-online', '--pack-destination', dir], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim().split('\n').pop());
+if (!tgz) die(`could not download the published tarball for ${name}@${expected} after ~90s.
+[verify] The package IS published and immutable — this is a VERIFICATION failure, not a publish
+[verify] failure. Do not re-run the workflow (it will die at npm publish with EPUBLISHCONFLICT).
+[verify] Re-run this check alone:  EXPECTED_VERSION=${expected} node scripts/verify-published.mjs`);
 execFileSync('tar', ['-xzf', join(dir, tgz), '-C', dir]);
 
 // 3. The manifest ships in dist/, never src/ — package.json declares
@@ -79,6 +105,30 @@ if (a !== b) {
   die('refusing to call this release good.');
 }
 
+// The manifest alone is narrower than "verify the published package": package.json
+// declares "files": ["dist/"] and two bins (dist/cli.js, dist/user-mcp.js), so a
+// stale CLI or a dropped file would sail through a matching manifest. Compare the
+// shipped FILE LIST against the built one too.
+const shippedFiles = execFileSync('tar', ['-tzf', join(dir, tgz)], { encoding: 'utf8' })
+  .split('\n')
+  .filter((f) => f.startsWith('package/dist/') && !f.endsWith('/'))
+  .map((f) => f.replace(/^package\//, ''))
+  .sort();
+const builtFiles = execFileSync('find', ['dist', '-type', 'f'], { encoding: 'utf8' })
+  .split('\n').filter(Boolean).sort();
+
+const missing = builtFiles.filter((f) => !shippedFiles.includes(f));
+const extra = shippedFiles.filter((f) => !builtFiles.includes(f));
+if (missing.length || extra.length) {
+  if (missing.length) console.error(`[verify] built but NOT shipped: ${missing.join(', ')}`);
+  if (extra.length) console.error(`[verify] shipped but NOT built: ${extra.join(', ')}`);
+  die('the published file list does not match what this job built.');
+}
+
+for (const bin of Object.values(pkg.bin || {})) {
+  if (!shippedFiles.includes(bin)) die(`declared bin "${bin}" is NOT in the published tarball.`);
+}
+
 const toolCount = (built.tools || []).length;
-say(`published manifest is byte-identical to the built one (${toolCount} tools).`);
+say(`manifest byte-identical (${toolCount} tools); ${shippedFiles.length} dist files match; bins present.`);
 say(`${name}@${live} verified against the registry.`);
