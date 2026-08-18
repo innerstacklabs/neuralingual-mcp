@@ -18,9 +18,9 @@ import type { StreamingProtocolEvent } from './streaming/protocol-types.js';
 import { UserApiClient, deriveTitleFromText } from './user-client.js';
 import { installEnvTelemetrySink } from './mcp-telemetry.js';
 import { loadAuth, clearAuth } from './auth-store.js';
-import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderConfigInput, RenderStatus, SessionContext, TonePreference } from './types.js';
+import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderStatus, SessionContext, TonePreference } from './types.js';
 import { API_BASE_URLS } from './types.js';
-import { serializeSetFile, parseSetFile } from './set-file.js';
+import { buildRenderInputFromSetFile, hasRenderSettings, serializeSetFile, parseSetFile } from './set-file.js';
 import {
   renderFrameworkMarkdown,
   extractFrameworkSchemaVersion,
@@ -89,27 +89,6 @@ function readStdin(): Promise<string> {
     process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     process.stdin.on('error', reject);
   });
-}
-
-
-/** Build a RenderConfigInput from parsed YAML fields. Used by set create and set apply. */
-function buildRenderInputFromParsed(
-  parsed: ReturnType<typeof parseSetFile>,
-  fallback?: { voiceId?: string | null; sessionContext?: string; durationSeconds?: number },
-): RenderConfigInput {
-  const input: RenderConfigInput = {
-    voiceId: parsed.voice ?? fallback?.voiceId ?? '',
-    sessionContext: (parsed.renderContext ?? fallback?.sessionContext ?? parsed.intentContext ?? 'general') as SessionContext,
-    durationMinutes: parsed.duration ?? (fallback?.durationSeconds ? Math.round(fallback.durationSeconds / 60) : 10),
-  };
-  if (parsed.pace !== undefined) input.paceWpm = parsed.pace;
-  if (parsed.background !== undefined) input.backgroundAudioPath = parsed.background;
-  if (parsed.backgroundVolume !== undefined) input.backgroundVolume = parsed.backgroundVolume;
-  if (parsed.repeats !== undefined) input.affirmationRepeatCount = parsed.repeats;
-  if (parsed.preamble !== undefined) input.includePreamble = parsed.preamble;
-  if (parsed.playAll !== undefined) input.playAll = parsed.playAll;
-  if (parsed.repetitionModel !== undefined) input.repetitionModel = parsed.repetitionModel;
-  return input;
 }
 
 
@@ -195,9 +174,11 @@ async function fetchSetFileDataUser(client: UserApiClient, intentId: string): Pr
     voiceProvider: latestConfig.voiceProvider,
     sessionContext: latestConfig.sessionContext as SessionContext,
     paceWpm: latestConfig.paceWpm,
+    pauseMsBetweenAffirmations: latestConfig.pauseMsBetweenAffirmations,
     durationSeconds: latestConfig.durationSeconds,
     backgroundAudioPath: latestConfig.backgroundAudioPath,
     backgroundVolume: latestConfig.backgroundVolume,
+    normalizeLoudness: latestConfig.normalizeLoudness,
     affirmationRepeatCount: latestConfig.affirmationRepeatCount,
     repetitionModel: latestConfig.repetitionModel,
     binauralPreset: latestConfig.binauralPreset ?? null,
@@ -205,6 +186,8 @@ async function fetchSetFileDataUser(client: UserApiClient, intentId: string): Pr
     subliminalEnabled: latestConfig.subliminalEnabled ?? false,
     subliminalVolume: latestConfig.subliminalVolume ?? null,
     includePreamble: latestConfig.includePreamble,
+    preambleText: latestConfig.preambleText,
+    postambleText: latestConfig.postambleText,
     playAll: latestConfig.playAll,
     createdAt: latestConfig.createdAt,
     updatedAt: latestConfig.updatedAt,
@@ -304,22 +287,12 @@ async function applySetFileUser(
   }
 
   // 3. Render config updates
-  const hasRenderFields = parsed.voice !== undefined ||
-    parsed.duration !== undefined ||
-    parsed.pace !== undefined ||
-    parsed.renderContext !== undefined ||
-    parsed.background !== undefined ||
-    parsed.backgroundVolume !== undefined ||
-    parsed.repeats !== undefined ||
-    parsed.preamble !== undefined ||
-    parsed.playAll !== undefined;
-
-  if (hasRenderFields) {
+  if (hasRenderSettings(parsed)) {
     if (!originalData.renderConfig) {
       console.error('Warning: no render config exists yet — skipping render settings. Run nl render configure first.');
     } else {
       const rc = originalData.renderConfig;
-      await client.configureRender(intentId, buildRenderInputFromParsed(parsed, rc));
+      await client.configureRender(intentId, buildRenderInputFromSetFile(parsed, rc));
       changes.push('render config: updated');
     }
   }

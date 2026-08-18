@@ -1230,7 +1230,7 @@
     },
     {
       "name": "nl_coaches",
-      "description": "List all available coaches with their summaries. Shows key, name, description, inspiredBy, signature voice, default tone, and voice perspective for each coach. Also indicates which coach is your current default. Requires the coaches feature to be enabled.",
+      "description": "List all available coaches with their summaries. Each coach carries a proper name and role label (e.g. \"Cole, the Head Coach\"), a tagline in the coach's own register, a stance, bestFor guidance and filtered identity-kit keywords, description, inspiredBy, signature voice, default tone, and voice perspective. Also indicates which coach is your current default. Requires the coaches feature to be enabled.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -1248,27 +1248,19 @@
     },
     {
       "name": "nl_coach_view",
-      "description": "View full details for a specific coach by key. Returns the coach's name, description, inspiredBy exemplars, signature voice, default tone, voice perspective, and visual metadata. Requires the coaches feature to be enabled.",
+      "description": "View full details for a specific coach by key. Returns the coach's proper name, role label, tagline, stance, what it is best for and wrong for, description, inspiredBy exemplars, signature voice, default tone, voice perspective, and visual metadata. Requires the coaches feature to be enabled.",
       "parameters": {
         "type": "object",
         "properties": {
           "key": {
             "type": "string",
             "enum": [
-              "aphorist",
-              "minimalist",
-              "plainspoken",
-              "mentor",
-              "contemplative",
-              "stoic",
-              "lyricist",
-              "mystic",
-              "visionary",
-              "sage",
               "commander",
-              "meaning_maker"
+              "mentor",
+              "meaning_maker",
+              "mystic"
             ],
-            "description": "The coach key to look up (e.g. 'commander', 'mentor', 'mystic')"
+            "description": "The coach key to look up. One of: commander (Cole, the Head Coach), mentor (Nia, the Mentor), meaning_maker (Theo, the Scientist), mystic (Ilana, the Visionary)."
           }
         },
         "required": [
@@ -1297,7 +1289,14 @@
               "string",
               "null"
             ],
-            "description": "Coach key to set as default (e.g. 'commander', 'mentor'), or null to clear"
+            "description": "Coach key to set as default, or null to clear. One of: commander (Cole, the Head Coach), mentor (Nia, the Mentor), meaning_maker (Theo, the Scientist), mystic (Ilana, the Visionary).",
+            "enum": [
+              "commander",
+              "mentor",
+              "meaning_maker",
+              "mystic",
+              null
+            ]
           },
           "tonePreference": {
             "type": [
@@ -1431,20 +1430,12 @@
           "style": {
             "type": "string",
             "enum": [
-              "aphorist",
-              "minimalist",
-              "plainspoken",
-              "mentor",
-              "contemplative",
-              "stoic",
-              "lyricist",
-              "mystic",
-              "visionary",
-              "sage",
               "commander",
-              "meaning_maker"
+              "mentor",
+              "meaning_maker",
+              "mystic"
             ],
-            "description": "Named style archetype to steer the writing style (rhetorical cadence only \u2014 no quotes or impersonation). Choose one: 'aphorist' \u2014 The Aphorist: short, paradoxical, declarative wisdom; 'minimalist' \u2014 The Minimalist: four-to-seven-word verdicts, pure mantra (good when output feels too elaborate); 'plainspoken' \u2014 The Plainspoken: warm, concrete, everyday language; 'mentor' \u2014 The Mentor: generous, encouraging, you-centered; 'contemplative' \u2014 The Contemplative: serene, spacious, compassionate (good for winding down); 'stoic' \u2014 The Stoic: terse, duty- and control-framed maxims; 'lyricist' \u2014 The Lyricist: rhythmic and dignified, rising cadence; 'mystic' \u2014 The Mystic: poetic, metaphor-rich, paradoxical (the most elaborate option); 'visionary' \u2014 The Visionary: bold, taste-driven, excellence-obsessed; 'sage' \u2014 The Sage: folksy, patient, value-over-hype; 'commander' \u2014 The Commander: disciplined ownership and calm authority (demanding, never degrading); 'meaning_maker' \u2014 The Meaning-Maker: dignified, purpose-centered, meaning-in-hardship. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
+            "description": "Named style archetype to steer the writing style (rhetorical cadence only \u2014 no quotes or impersonation). Choose one: 'commander' \u2014 The Head Coach: Disciplined ownership and calm authority \u2014 demanding, never degrading. 'mentor' \u2014 The Mentor: Sees you, and believes you before the evidence comes in. 'meaning_maker' \u2014 The Scientist: Tells you why it's working. Warm-curious, evidence-shaped, in your corner. 'mystic' \u2014 The Visionary: Poetic, metaphor-rich, paradoxical \u2014 image-dense and flowing. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
             "note": "Ignored when affirmations is provided."
           },
           "styleNotes": {
@@ -1455,20 +1446,12 @@
           "coachKey": {
             "type": "string",
             "enum": [
-              "aphorist",
-              "minimalist",
-              "plainspoken",
-              "mentor",
-              "contemplative",
-              "stoic",
-              "lyricist",
-              "mystic",
-              "visionary",
-              "sage",
               "commander",
-              "meaning_maker"
+              "mentor",
+              "meaning_maker",
+              "mystic"
             ],
-            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. Unknown keys are ignored (falls back to your default coach). Not saved \u2014 affects this generation only. Ignored when affirmations is provided."
+            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. One of: commander (Cole, the Head Coach), mentor (Nia, the Mentor), meaning_maker (Theo, the Scientist), mystic (Ilana, the Visionary) \u2014 an unrecognized key is rejected with the valid options named, never silently substituted. Not saved \u2014 affects this generation only. Ignored when affirmations is provided."
           },
           "setAsDefault": {
             "type": "boolean",

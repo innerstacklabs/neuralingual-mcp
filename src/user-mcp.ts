@@ -19,7 +19,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { UserApiClient, deriveTitleFromText } from './user-client.js';
 import { loadAuth } from './auth-store.js';
-import { serializeSetFile, parseSetFile } from './set-file.js';
+import { buildRenderInputFromSetFile, hasRenderSettings, serializeSetFile, parseSetFile } from './set-file.js';
 import { jsonSchemaToInputSchema, type JsonSchema } from './json-schema-to-zod.js';
 import {
   renderFrameworkMarkdown,
@@ -204,9 +204,11 @@ async function fetchSetFileData(
         voiceProvider: latestConfig.voiceProvider,
         sessionContext: latestConfig.sessionContext as SessionContext,
         paceWpm: latestConfig.paceWpm,
+        pauseMsBetweenAffirmations: latestConfig.pauseMsBetweenAffirmations,
         durationSeconds: latestConfig.durationSeconds,
         backgroundAudioPath: latestConfig.backgroundAudioPath,
         backgroundVolume: latestConfig.backgroundVolume,
+        normalizeLoudness: latestConfig.normalizeLoudness,
         affirmationRepeatCount: latestConfig.affirmationRepeatCount,
         includePreamble: latestConfig.includePreamble,
         playAll: latestConfig.playAll,
@@ -215,6 +217,8 @@ async function fetchSetFileData(
         binauralVolume: latestConfig.binauralVolume ?? null,
         subliminalEnabled: latestConfig.subliminalEnabled ?? false,
         subliminalVolume: latestConfig.subliminalVolume ?? null,
+        preambleText: latestConfig.preambleText,
+        postambleText: latestConfig.postambleText,
         createdAt: latestConfig.createdAt,
         updatedAt: latestConfig.updatedAt,
       }
@@ -292,35 +296,12 @@ async function applySetFile(
     }
   }
 
-  const hasRenderFields =
-    parsed.voice !== undefined ||
-    parsed.duration !== undefined ||
-    parsed.pace !== undefined ||
-    parsed.renderContext !== undefined ||
-    parsed.intentContext !== undefined ||
-    parsed.background !== undefined ||
-    parsed.backgroundVolume !== undefined ||
-    parsed.repeats !== undefined ||
-    parsed.preamble !== undefined ||
-    parsed.playAll !== undefined;
-
-  if (hasRenderFields) {
+  if (hasRenderSettings(parsed)) {
     if (!originalData.renderConfig) {
       changes.push('render config: skipped (no existing config — run nl_render_configure first)');
     } else {
       const rc = originalData.renderConfig;
-      const input: RenderConfigInput = {
-        voiceId: parsed.voice ?? rc.voiceId ?? '',
-        sessionContext: (parsed.renderContext ?? parsed.intentContext ?? rc.sessionContext ?? 'general') as SessionContext,
-        durationMinutes: parsed.duration ?? Math.round(rc.durationSeconds / 60),
-      };
-      if (parsed.pace !== undefined) input.paceWpm = parsed.pace;
-      if (parsed.background !== undefined) input.backgroundAudioPath = parsed.background;
-      if (parsed.backgroundVolume !== undefined) input.backgroundVolume = parsed.backgroundVolume;
-      if (parsed.repeats !== undefined) input.affirmationRepeatCount = parsed.repeats;
-      if (parsed.preamble !== undefined) input.includePreamble = parsed.preamble;
-      if (parsed.playAll !== undefined) input.playAll = parsed.playAll;
-      await client.configureRender(intentId, input);
+      await client.configureRender(intentId, buildRenderInputFromSetFile(parsed, rc));
       changes.push('render config: updated');
     }
   }

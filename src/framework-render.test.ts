@@ -40,7 +40,7 @@ describe('renderFrameworkMarkdown', () => {
     expect(md).toContain('Draws on contemporary cognitive-behavioral');
     expect(md).toContain('## Principles');
     expect(md).toContain('- **Self-compassion** — Meet difficulty with warmth');
-    expect(md).toContain('## Sources');
+    expect(md).toContain('## Influences');
     expect(md).toContain('- **Kristin Neff** _(from Self-Compassion)_ — Framework for self-kindness.');
     // Epictetus has work: null — no _(from ...)_ suffix
     expect(md).toContain('- **Epictetus** — Locus-of-control distinction.');
@@ -122,7 +122,7 @@ describe('renderFrameworkMarkdown', () => {
         'scalar', // garbage
       ] as unknown[],
     });
-    expect(md).toContain('## Sources');
+    expect(md).toContain('## Influences');
     expect(md).toContain('- **Clean source** — Works.');
     expect(md).toContain('- **No contribution**'); // rendered with just name
   });

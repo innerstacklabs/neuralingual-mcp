@@ -28,16 +28,14 @@ interface UserDto {
 }
 
 /** #3116 — Coach DTO (client-safe shape from GET /coaches). */
-interface CoachDto {
-  key: string;
-  name: string;
-  description: string;
-  inspiredBy: string[];
-  visual: { iconRef: string; focalPoint: { x: number; y: number }; aspectRatio: number };
-  signatureVoiceId: string;
-  defaultTone: string;
-  voicePerspective: string;
-}
+// The wire shape is owned by `coachDtoSchema` in @neuralingual/core. This file
+// is synced verbatim to the STANDALONE public repo, which has no pnpm workspace
+// and so can never resolve a `@neuralingual/*` specifier — importing core here
+// broke every publish from #44 until #194. The declaration in ./types.js is
+// synced alongside this file and is pinned to the core schema by
+// coach-dto-parity.test.ts, so there is still exactly one authority.
+export type { CoachDto } from './types.js';
+import type { CoachDto } from './types.js';
 
 interface LoginResult {
   accessToken: string;
@@ -116,9 +114,11 @@ interface IntentDetail {
     voiceProvider: string;
     sessionContext: string;
     paceWpm: number;
+    pauseMsBetweenAffirmations: number;
     durationSeconds: number;
     backgroundAudioPath: string | null;
     backgroundVolume: number;
+    normalizeLoudness: boolean;
     affirmationRepeatCount: number;
     repetitionModel: string;
     binauralPreset: string | null;
@@ -126,6 +126,8 @@ interface IntentDetail {
     subliminalEnabled: boolean;
     subliminalVolume: number | null;
     includePreamble: boolean;
+    preambleText: string | null;
+    postambleText: string | null;
     playAll: boolean;
     createdAt: string;
     updatedAt: string;
