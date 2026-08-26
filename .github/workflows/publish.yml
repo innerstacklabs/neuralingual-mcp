@@ -18,6 +18,8 @@ jobs:
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
+      # Trusted Publishing (OIDC) needs npm >= 11.5; node 22 ships an older npm.
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run build
       - run: npm test
@@ -36,9 +38,11 @@ jobs:
           fi
           echo "tag v$TAG matches package.json"
 
+      # Auth is the repo's npm Trusted Publisher (OIDC via id-token: write above).
+      # Do NOT reintroduce NODE_AUTH_TOKEN here: an explicit token OVERRIDES OIDC,
+      # which is how the expired NPM_TOKEN broke the v0.9.4 publish on 2026-08-25
+      # while a working trusted-publisher config sat unused.
       - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # A green `npm publish` is not evidence that the registry serves the right
       # package — it has printed "Publishing to registry.npmjs.org" and failed on
