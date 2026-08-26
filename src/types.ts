@@ -371,7 +371,7 @@ export interface CoachVisualDto {
  * fails `pnpm typecheck` here rather than at publish time.
  *
  * ⛔ `key` is `string`, NOT the `CoachKey` union — deliberately. Copying
- * core's `z.enum(['commander','mentor','meaning_maker','mystic'])` would
+ * core's `z.enum(['cole','nia','theo','ilana'])` would
  * hand-maintain the coach roster in the published package, which is exactly
  * the defect #183 removed (the shipped schema advertised eight coaches #44 had
  * already cut). `tool-manifest.json` carries the ONE generated, byte-identical-

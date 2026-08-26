@@ -1255,12 +1255,12 @@
           "key": {
             "type": "string",
             "enum": [
-              "commander",
-              "mentor",
-              "meaning_maker",
-              "mystic"
+              "cole",
+              "nia",
+              "theo",
+              "ilana"
             ],
-            "description": "The coach key to look up. One of: commander (Cole, the Head Coach), mentor (Nia, the Mentor), meaning_maker (Theo, the Scientist), mystic (Ilana, the Visionary)."
+            "description": "The coach key to look up. One of: cole (Cole, the Head Coach), nia (Nia, the Mentor), theo (Theo, the Scientist), ilana (Ilana, the Visionary)."
           }
         },
         "required": [
@@ -1289,12 +1289,12 @@
               "string",
               "null"
             ],
-            "description": "Coach key to set as default, or null to clear. One of: commander (Cole, the Head Coach), mentor (Nia, the Mentor), meaning_maker (Theo, the Scientist), mystic (Ilana, the Visionary).",
+            "description": "Coach key to set as default, or null to clear. One of: cole (Cole, the Head Coach), nia (Nia, the Mentor), theo (Theo, the Scientist), ilana (Ilana, the Visionary).",
             "enum": [
-              "commander",
-              "mentor",
-              "meaning_maker",
-              "mystic",
+              "cole",
+              "nia",
+              "theo",
+              "ilana",
               null
             ]
           },
@@ -1430,12 +1430,12 @@
           "style": {
             "type": "string",
             "enum": [
-              "commander",
-              "mentor",
-              "meaning_maker",
-              "mystic"
+              "cole",
+              "nia",
+              "theo",
+              "ilana"
             ],
-            "description": "Named style archetype to steer the writing style (rhetorical cadence only \u2014 no quotes or impersonation). Choose one: 'commander' \u2014 The Head Coach: Disciplined ownership and calm authority \u2014 demanding, never degrading. 'mentor' \u2014 The Mentor: Sees you, and believes you before the evidence comes in. 'meaning_maker' \u2014 The Scientist: Tells you why it's working. Warm-curious, evidence-shaped, in your corner. 'mystic' \u2014 The Visionary: Poetic, metaphor-rich, paradoxical \u2014 image-dense and flowing. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
+            "description": "Named style archetype to steer the writing style (rhetorical cadence only \u2014 no quotes or impersonation). Choose one: 'cole' \u2014 The Head Coach: Disciplined ownership and calm authority \u2014 demanding, never degrading. 'nia' \u2014 The Mentor: Sees you, and believes you before the evidence comes in. 'theo' \u2014 The Scientist: Tells you why it's working. Warm-curious, evidence-shaped, in your corner. 'ilana' \u2014 The Visionary: Poetic, metaphor-rich, paradoxical \u2014 image-dense and flowing. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
             "note": "Ignored when affirmations is provided."
           },
           "styleNotes": {
@@ -1446,12 +1446,12 @@
           "coachKey": {
             "type": "string",
             "enum": [
-              "commander",
-              "mentor",
-              "meaning_maker",
-              "mystic"
+              "cole",
+              "nia",
+              "theo",
+              "ilana"
             ],
-            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. One of: commander (Cole, the Head Coach), mentor (Nia, the Mentor), meaning_maker (Theo, the Scientist), mystic (Ilana, the Visionary) \u2014 an unrecognized key is rejected with the valid options named, never silently substituted. Not saved \u2014 affects this generation only. Ignored when affirmations is provided."
+            "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. One of: cole (Cole, the Head Coach), nia (Nia, the Mentor), theo (Theo, the Scientist), ilana (Ilana, the Visionary) \u2014 an unrecognized key is rejected with the valid options named, never silently substituted. Not saved \u2014 affects this generation only. Ignored when affirmations is provided."
           },
           "setAsDefault": {
             "type": "boolean",
