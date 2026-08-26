@@ -1147,7 +1147,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
     withClient(async (client) => {
       const key = params['key'] as string;
       if (!key) {
-        return errorResult('Please provide a coach key (e.g. "commander", "mentor", "mystic").');
+        return errorResult('Please provide a coach key (e.g. "cole", "nia", "ilana").');
       }
 
       let coaches;
