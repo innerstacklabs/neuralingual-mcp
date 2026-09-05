@@ -97,6 +97,8 @@ export class StreamRenderer {
 
   // Affirmations.
   private affirmationCount = 0;
+  /** nl#416 — normalized live-chunk texts already counted; see the chunk case. */
+  private readonly liveTexts = new Set<string>();
   /**
    * Guard so `cli.generation.phase.affirmations_streaming.begin` fires
    * exactly once per stream across both entry paths (framework_streaming.end
@@ -200,10 +202,39 @@ export class StreamRenderer {
         // Fires once across this and the framework_streaming.end path —
         // the helper is guarded by `affirmationsTelemetryEmitted`.
         this.emitAffirmationsBeginTelemetryOnce();
-        this.affirmationCount += 1;
+        // nl#416 — count AFFIRMATIONS, not frames. Live chunks are emitted per
+        // PARSED item, before the batch dedup, so the same line can arrive twice
+        // (measured: 80 live chunks carrying 60 distinct lines); catch-up frames
+        // cannot repeat, because the burst emits only rows the client never saw.
+        // Counting every frame is what reported a 100-line set as 130.
+        if (event.data.final) {
+          this.affirmationCount += 1;
+        } else {
+          const key = event.data.affirmation.text.trim().replace(/\s+/g, ' ');
+          if (!this.liveTexts.has(key)) {
+            this.liveTexts.add(key);
+            this.affirmationCount += 1;
+          }
+        }
         this.renderAffirmationArrival(event.data.affirmation.text);
         return;
       }
+      case 'phase.affirmations_topup':
+        // nl#416 — the top-up round is a blocking call emitting no chunks for
+        // ~20 s. Say so, rather than letting the count sit frozen and unexplained.
+        //
+        // ⚠️ Written directly, NOT through `renderAffirmationArrival`: that
+        // helper prefixes the affirmation number in non-TTY mode and redraws
+        // the progress bar in TTY mode, so a status notice sent through it
+        // renders as a numbered affirmation that does not exist.
+        this.writeOut(
+          `${this.ttyOut ? '\n' : ''}  … reviewing: composing ${event.data.deficit} more to reach your count\n`,
+        );
+        this.emitPhaseTelemetry('affirmations_topup', {
+          round: event.data.round,
+          deficit: event.data.deficit,
+        });
+        return;
       case 'phase.output_safety':
         if (this.activePhase === 'Composing affirmations') {
           this.completePhase(`${this.affirmationCount} total`);
@@ -220,6 +251,12 @@ export class StreamRenderer {
       case 'phase.saved':
         this.beginPhase('Saving');
         this.completePhase('ok');
+        // nl#416 — reconcile against the authoritative persisted count. The
+        // running tally is provisional: a line can survive the per-item filter
+        // and still be dropped by the batch derive.
+        if (typeof event.data.deliveredCount === 'number') {
+          this.affirmationCount = event.data.deliveredCount;
+        }
         this.emitPhaseTelemetry('saved', { intentId: event.data.intentId });
         return;
       case 'phase.resume_begin':

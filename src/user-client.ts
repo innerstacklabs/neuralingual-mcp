@@ -14,7 +14,7 @@ interface UserDto {
   username: string | null;
   authProvider: string;
   tonePreference: string | null;
-  defaultCoach: string | null;
+  lastCoachKey: string | null;
   completedOnboarding: boolean;
   subscriptionTier: string | null;
   subscriptionStatus: string | null;
@@ -866,7 +866,6 @@ export class UserApiClient {
     style?: string,
     styleNotes?: Record<string, unknown>,
     coachKey?: string,
-    setAsDefault?: boolean,
   ): Promise<GenerateResult> {
     const body: Record<string, unknown> = {};
     if (intentText) body['intentText'] = intentText;
@@ -877,8 +876,6 @@ export class UserApiClient {
     if (styleNotes) body['styleNotes'] = styleNotes;
     // #3111 — Optional per-generation coach override (server resolves tolerantly).
     if (coachKey) body['coachKey'] = coachKey;
-    // #3115 — Persist coachKey as defaultCoach after successful generation.
-    if (setAsDefault) body['setAsDefault'] = true;
     return this.request('POST', '/affirmations/generate', body);
   }
 
@@ -894,7 +891,6 @@ export class UserApiClient {
     style?: string,
     styleNotes?: Record<string, unknown>,
     coachKey?: string,
-    setAsDefault?: boolean,
   ): Promise<{ data: GenerateResult; rateLimit?: RateLimitMeta }> {
     const body: Record<string, unknown> = {};
     if (intentText) body['intentText'] = intentText;
@@ -905,8 +901,6 @@ export class UserApiClient {
     if (styleNotes) body['styleNotes'] = styleNotes;
     // #3111 — Optional per-generation coach override (server resolves tolerantly).
     if (coachKey) body['coachKey'] = coachKey;
-    // #3115 — Persist coachKey as defaultCoach after successful generation.
-    if (setAsDefault) body['setAsDefault'] = true;
     return this.requestWithRateMeta<GenerateResult>('POST', '/affirmations/generate', body);
   }
 
@@ -1010,11 +1004,12 @@ export class UserApiClient {
 
   /**
    * Update user-level profile settings via PATCH /auth/me. Thin wrapper that
-   * accepts the settings subset (defaultCoach, tonePreference). Validation is
-   * server-side (coachKeySchema, tonePreferenceSchema).
+   * accepts the settings subset (tonePreference). Validation is server-side
+   * (tonePreferenceSchema).
+   *
+   * ⛔ The coach is NOT a settable profile field (nl#304) — the route rejects it.
    */
   async updateSettings(data: {
-    defaultCoach?: string | null;
     tonePreference?: string | null;
   }): Promise<{ user: UserDto }> {
     return this.request('PATCH', '/auth/me', data);
@@ -1023,7 +1018,7 @@ export class UserApiClient {
   // --- Coaches (#3116) ---
 
   /**
-   * List all coaches (GET /coaches). Returns 404 when the coaches flag is off.
+   * List all coaches (GET /coaches). Returns 404 when the coach feature gate is off.
    */
   async getCoaches(): Promise<{ coaches: CoachDto[] }> {
     return this.request('GET', '/coaches');

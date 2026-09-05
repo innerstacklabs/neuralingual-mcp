@@ -643,7 +643,7 @@
           "affirmationIds": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 60,
+            "maxItems": 100,
             "items": {
               "type": "string",
               "minLength": 1
@@ -695,7 +695,7 @@
           "affirmationIds": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 60,
+            "maxItems": 100,
             "items": {
               "type": "string",
               "minLength": 1
@@ -788,9 +788,10 @@
               "theta",
               "alpha",
               "beta",
+              "off",
               null
             ],
-            "description": "Default binaural beat preset (null to disable)"
+            "description": "Default binaural beat preset. \"off\" stores an explicit Off choice; null clears the override so the context default applies"
           },
           "paceWpm": {
             "type": [
@@ -1230,7 +1231,7 @@
     },
     {
       "name": "nl_coaches",
-      "description": "List all available coaches with their summaries. Each coach carries a proper name and role label (e.g. \"Cole, the Head Coach\"), a tagline in the coach's own register, a stance, bestFor guidance and filtered identity-kit keywords, description, inspiredBy, signature voice, default tone, and voice perspective. Also indicates which coach is your current default. Requires the coaches feature to be enabled.",
+      "description": "List all available coaches with their summaries. Each coach carries a proper name and role label (e.g. \"Cole, the Head Coach\"), a tagline in the coach's own register, an angle line naming what that coach brings to your intent, a stance, filtered identity-kit keywords, description, inspiredBy, signature voice, default tone, and voice perspective. Also indicates which coach you last generated with. Requires the coaches feature to be enabled.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -1280,24 +1281,10 @@
     },
     {
       "name": "nl_user_settings_update",
-      "description": "Update user profile settings. Set your default coach and/or tone preference. Pass null to clear a setting (defaultCoach=null clears coach, tonePreference=null resets to coach default).",
+      "description": "Update user profile settings. Set your tone preference. Pass null to clear a setting (tonePreference=null resets to the coach default). The coach is not a stored setting \u2014 pass coachKey to nl_playlist_create to pick one per playlist; the coach you generate with is remembered as your last used.",
       "parameters": {
         "type": "object",
         "properties": {
-          "defaultCoach": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Coach key to set as default, or null to clear. One of: cole (Cole, the Head Coach), nia (Nia, the Mentor), theo (Theo, the Scientist), ilana (Ilana, the Visionary).",
-            "enum": [
-              "cole",
-              "nia",
-              "theo",
-              "ilana",
-              null
-            ]
-          },
           "tonePreference": {
             "type": [
               "string",
@@ -1372,7 +1359,7 @@
     },
     {
       "name": "nl_playlist_create",
-      "description": "Create a new playlist. Provide intent text, source material (from a book, article, PDF, etc.), your own affirmations, or a combination. When source is provided, AI generates affirmations grounded in that material \u2014 costs 1 credit. When affirmations is provided, the playlist is created directly from your text with NO generation and NO credit charge (source/style/styleNotes/coachKey/setAsDefault are ignored in this mode).",
+      "description": "Create a new playlist. Provide intent text, source material (from a book, article, PDF, etc.), your own affirmations, or a combination. When source is provided, AI generates affirmations grounded in that material \u2014 costs 1 credit. When affirmations is provided, the playlist is created directly from your text with NO generation and NO credit charge (source/style/styleNotes/coachKey are ignored in this mode).",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1453,10 +1440,6 @@
             ],
             "description": "Per-generation coach override. When set (and the coaches feature is enabled for you), this coach's bundle (writing style + voice perspective) applies to THIS playlist only, overriding your default coach. Use it to compare coaches on the same intent without changing your default. One of: cole (Cole, the Head Coach), nia (Nia, the Mentor), theo (Theo, the Scientist), ilana (Ilana, the Visionary) \u2014 an unrecognized key is rejected with the valid options named, never silently substituted. Not saved \u2014 affects this generation only. Ignored when affirmations is provided."
           },
-          "setAsDefault": {
-            "type": "boolean",
-            "description": "When true AND coachKey is provided AND coaches feature is enabled: persist the coachKey as your new default coach after successful generation. Ignored when coachKey is absent, feature is off, generation fails, or affirmations is provided."
-          },
           "affirmations": {
             "type": "array",
             "minItems": 1,
@@ -1466,7 +1449,7 @@
               "minLength": 1,
               "maxLength": 240
             },
-            "description": "Your own affirmation texts (1-240 chars each, max 45 total). When provided, the playlist is created directly from these \u2014 skips AI generation and the credit charge entirely. Requires text (used as the playlist's intent). Any sourceText/sourceUrl/sourcePdf/sourceYoutube/style/styleNotes/coachKey/setAsDefault are ignored (they only affect AI generation)."
+            "description": "Your own affirmation texts (1-240 chars each, max 45 total). When provided, the playlist is created directly from these \u2014 skips AI generation and the credit charge entirely. Requires text (used as the playlist's intent). Any sourceText/sourceUrl/sourcePdf/sourceYoutube/style/styleNotes/coachKey are ignored (they only affect AI generation)."
           },
           "voicePerspective": {
             "type": "string",

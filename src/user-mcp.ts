@@ -27,7 +27,7 @@ import {
   extractFrameworkTakeaway,
   hasFramework,
 } from './framework-render.js';
-import { API_BASE_URLS } from './types.js';
+import { API_BASE_URLS, DEFAULT_USER_INTENT_VOICE_PERSPECTIVE } from './types.js';
 import type {
   RenderConfigInput,
   SessionContext,
@@ -224,6 +224,7 @@ async function fetchSetFileData(
       }
     : null;
 
+  // User intents don't have catalog fields or voicePerspective on this DTO — default them.
   const mappedIntent: Intent = {
     id: intent.id,
     userId: '',
@@ -232,6 +233,7 @@ async function fetchSetFileData(
     rawText: intent.rawText,
     tonePreference: (intent.tonePreference as TonePreference) ?? null,
     sessionContext: intent.sessionContext as SessionContext,
+    voicePerspective: DEFAULT_USER_INTENT_VOICE_PERSPECTIVE,
     isCatalog: false,
     catalogSlug: null,
     catalogCategory: null,
@@ -414,15 +416,15 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const style = params['style'] as string | undefined;
       const styleNotes = params['styleNotes'] as Record<string, unknown> | undefined;
       // #3111 — Optional per-generation coach override. Resolved tolerantly
-      // server-side (unknown/stale → falls back to defaultCoach, no error).
+      // server-side (unknown/stale → falls back to the user's last-used coach,
+      // no error). nl#304: a generation stamps that coach as last-used, so there
+      // is no separate "set as default" knob to pass.
       const coachKey = params['coachKey'] as string | undefined;
-      // #3115 — Persist coachKey as defaultCoach after successful generation.
-      const setAsDefault = params['setAsDefault'] as boolean | undefined;
       // #40 — Optional affirmations[]: create the playlist directly from
       // user-authored affirmations, skipping generation and the credit
       // charge entirely (nl_playlist_create).
-      // Consistent with style/styleNotes/coachKey/setAsDefault (all
-      // generation-only knobs), any source* params are simply IGNORED here
+      // Consistent with style/styleNotes/coachKey (all generation-only
+      // knobs), any source* params are simply IGNORED here
       // rather than rejected — a caller may legitimately pass along the
       // source it drew affirmations from for context without wanting
       // generation to run against it.
@@ -541,7 +543,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         }
       }
 
-      const result = await client.createAndGenerate(text, tone, source, style, styleNotes, coachKey, setAsDefault);
+      const result = await client.createAndGenerate(text, tone, source, style, styleNotes, coachKey);
       const output = youtubePreview
         ? { ...result, youtubePreview }
         : result;
@@ -679,7 +681,7 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
             displayName: user.displayName,
             username: user.username,
             tonePreference: user.tonePreference,
-            defaultCoach: user.defaultCoach,
+            lastCoachKey: user.lastCoachKey,
             subscriptionTier: user.subscriptionTier,
             subscriptionStatus: user.subscriptionStatus,
             creditBalance: user.creditBalance,
@@ -1083,27 +1085,20 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
 
   userSettingsUpdate: async (params) =>
     withClient(async (client) => {
-      const defaultCoach = params['defaultCoach'];
+      // ⛔ No coach setting here (nl#304). There is no stored default coach to
+      // update; `nl_playlist_create.coachKey` picks the coach per generation and
+      // the API remembers it as the user's last-used, exactly as the app does.
       const tonePreference = params['tonePreference'];
 
-      if (defaultCoach === undefined && tonePreference === undefined) {
-        return errorResult('At least one setting must be provided (defaultCoach or tonePreference).');
+      if (tonePreference === undefined) {
+        return errorResult('At least one setting must be provided (tonePreference).');
       }
 
-      const data: Record<string, unknown> = {};
-      if (defaultCoach !== undefined) data['defaultCoach'] = defaultCoach as string | null;
-      if (tonePreference !== undefined) data['tonePreference'] = tonePreference as string | null;
-
-      const result = await client.updateSettings(data as { defaultCoach?: string | null; tonePreference?: string | null });
+      const result = await client.updateSettings({
+        tonePreference: tonePreference as string | null,
+      });
       return textResult(
-        JSON.stringify(
-          {
-            defaultCoach: result.user.defaultCoach,
-            tonePreference: result.user.tonePreference,
-          },
-          null,
-          2,
-        ),
+        JSON.stringify({ tonePreference: result.user.tonePreference }, null, 2),
       );
     }),
 
@@ -1123,21 +1118,22 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         throw err;
       }
 
-      // Fetch user's defaultCoach to mark active coach.
-      let defaultCoach: string | null = null;
+      // nl#304 — mark the coach this user last generated with. It is NOT a
+      // "default" any more: nothing sets it directly, it is stamped by the
+      // generation path, and `nl_playlist_create.coachKey` overrides it per call.
+      let lastCoachKey: string | null = null;
       try {
         const me = await client.getMe();
-        defaultCoach = me.user.defaultCoach;
+        lastCoachKey = me.user.lastCoachKey;
       } catch {
-        // Non-fatal — still show coaches without the default marker.
+        // Non-fatal — still show coaches without the last-used marker.
       }
 
-      // Return full coach data as JSON with defaultCoach marker.
       const output = {
-        defaultCoach,
+        lastCoachKey,
         coaches: coaches.map((c) => ({
           ...c,
-          isDefault: c.key === defaultCoach,
+          isLastUsed: c.key === lastCoachKey,
         })),
       };
       return textResult(JSON.stringify(output, null, 2));
@@ -1147,7 +1143,13 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
     withClient(async (client) => {
       const key = params['key'] as string;
       if (!key) {
-        return errorResult('Please provide a coach key (e.g. "cole", "nia", "ilana").');
+        // ⛔ Do NOT name example keys here. This file is synced to the public repo,
+        // where `@neuralingual/core` does not exist, so the roster cannot be imported —
+        // a hand-written example list is a roster copy that nothing can keep honest, and
+        // this one had drifted to naming only three of the four (#272). `nl_coaches`
+        // returns the live list, and the unknown-key branch below names it from the
+        // server response.
+        return errorResult('Please provide a coach key. Run nl_coaches to list them.');
       }
 
       let coaches;
@@ -1168,17 +1170,16 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         return errorResult(`Unknown coach key "${key}". Valid keys: ${validKeys}`);
       }
 
-      // Fetch user's defaultCoach to show if this is the current default.
-      let isDefault = false;
+      // nl#304 — last-used, not default. See the note in `coaches` above.
+      let isLastUsed = false;
       try {
         const me = await client.getMe();
-        isDefault = me.user.defaultCoach === key;
+        isLastUsed = me.user.lastCoachKey === key;
       } catch {
         // Non-fatal.
       }
 
-      // Return full coach data as JSON with isDefault marker.
-      const output = { ...coach, isDefault };
+      const output = { ...coach, isLastUsed };
       return textResult(JSON.stringify(output, null, 2));
     }),
 };

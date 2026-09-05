@@ -18,8 +18,9 @@ import type { StreamingProtocolEvent } from './streaming/protocol-types.js';
 import { UserApiClient, deriveTitleFromText } from './user-client.js';
 import { installEnvTelemetrySink } from './mcp-telemetry.js';
 import { loadAuth, clearAuth } from './auth-store.js';
+import { deviceLogin, shouldUseDeviceFlow } from './device-login.js';
 import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderStatus, SessionContext, TonePreference } from './types.js';
-import { API_BASE_URLS } from './types.js';
+import { API_BASE_URLS, DEFAULT_USER_INTENT_VOICE_PERSPECTIVE } from './types.js';
 import { buildRenderInputFromSetFile, hasRenderSettings, serializeSetFile, parseSetFile } from './set-file.js';
 import {
   renderFrameworkMarkdown,
@@ -194,7 +195,7 @@ async function fetchSetFileDataUser(client: UserApiClient, intentId: string): Pr
   } : null;
 
   // Map user intent detail to the Intent type expected by SetFileData.
-  // User intents don't have catalog fields — default them.
+  // User intents don't have catalog fields or voicePerspective on this DTO — default them.
   const mappedIntent: Intent = {
     id: intent.id,
     userId: '',
@@ -203,6 +204,7 @@ async function fetchSetFileDataUser(client: UserApiClient, intentId: string): Pr
     rawText: intent.rawText,
     tonePreference: (intent.tonePreference as TonePreference) ?? null,
     sessionContext: intent.sessionContext as SessionContext,
+    voicePerspective: DEFAULT_USER_INTENT_VOICE_PERSPECTIVE,
     isCatalog: false,
     catalogSlug: null,
     catalogCategory: null,
@@ -464,22 +466,52 @@ async function browserLogin(env: ApiEnv): Promise<void> {
   });
 }
 
+/**
+ * The non-admin half of `nl login`, hoisted out of the command body.
+ *
+ * ⚠️ `cli.ts` carries the login action TWICE — the live one below, and a
+ * `@public-only` commented copy that the PUBLISHED CLI actually compiles. The
+ * split exists because the `--admin` option forces a strip block that cannot
+ * close until the whole `.action()` ends, so admin-only markers drag non-admin
+ * logic along with them. Keeping the shared body in one function means the two
+ * copies differ only in the admin branch: everything a future edit is likely to
+ * touch — flow selection, error handling — has exactly one definition, and the
+ * published binary cannot silently keep old behaviour because somebody edited
+ * only the copy they could see.
+ */
+async function runNonAdminLogin(
+  env: ApiEnv,
+  opts: { device?: boolean; browser?: boolean },
+): Promise<void> {
+  if (opts.device && opts.browser) {
+    console.error('Error: pass --device or --browser, not both');
+    process.exit(1);
+  }
+  try {
+    if (shouldUseDeviceFlow(opts, process.env, process.platform)) {
+      await deviceLogin(env);
+    } else {
+      await browserLogin(env);
+    }
+  } catch (err: unknown) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+}
+
 program
   .command('login')
-  .description('Log in to Neuralingual (Apple Sign-In via browser)')
+  .description('Log in to Neuralingual (device code when headless, browser otherwise)')
   .option('--env <env>', 'API environment: dev or production', 'production')
-  .action(async (opts: { env: string }) => {
+  .option('--device', 'Use the device-code flow (no local browser needed)')
+  .option('--browser', 'Use the loopback browser flow (requires a browser on this machine)')
+  .action(async (opts: { env: string; device?: boolean; browser?: boolean }) => {
     const env = opts.env as ApiEnv;
     if (env !== 'dev' && env !== 'production') {
       console.error('Error: --env must be "dev" or "production"');
       process.exit(1);
     }
-    try {
-      await browserLogin(env);
-    } catch (err: unknown) {
-      console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
-    }
+    await runNonAdminLogin(env, opts);
   });
 
 // ─── logout ─────────────────────────────────────────────────────────────────

@@ -702,3 +702,132 @@ describe('StreamRenderer — Pass 2 (affirmations_streaming) telemetry (PR #907 
     r.cleanup();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// nl#416 — the CLI had the same over-count as the web client.
+//
+// `affirmationCount` incremented once per chunk, so the post-Pass-2 catch-up
+// burst (final-set members that were never streamed — top-up items above all)
+// inflated both the mid-stream "N total" and the summary's "Affirmations: N".
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('StreamRenderer — affirmation counting (nl#416)', () => {
+  function run(events: StreamingProtocolEvent[]): string {
+    const out = makeStream(false);
+    const err = makeStream(false);
+    const r = new StreamRenderer({
+      streamText: false,
+      stdout: out,
+      stderr: err,
+      operation: 'create',
+    });
+    for (const e of events) r.onEvent(e);
+    return out.buffer;
+  }
+
+  const chunk = (text: string, final?: boolean) =>
+    ev('phase.affirmations_streaming.chunk', {
+      affirmation: { text, grouping: 'G', rationale: 'R' },
+      ...(final === undefined ? {} : { final }),
+    });
+
+  it('counts DISTINCT live lines, not chunk emissions', () => {
+    // Live chunks are emitted per PARSED item, before the batch dedup, so the
+    // same affirmation can stream twice. Counting frames is what reported a
+    // 100-line set as 130.
+    const buffer = run([
+      ev('phase.framework_streaming.end', { framework: {} }),
+      chunk('I am one.'),
+      chunk('I am two.'),
+      chunk('I am one.'),
+      chunk('I am  one. '),
+      ev('phase.complete', { intentId: 'i1', affirmationSetId: 's1', totalDurationMs: 1 }),
+    ]);
+    expect(buffer).toContain('Affirmations: 2');
+  });
+
+  it('counts catch-up lines — the burst emits only rows never streamed', () => {
+    const buffer = run([
+      ev('phase.framework_streaming.end', { framework: {} }),
+      chunk('I am one.'),
+      chunk('I am one.'),
+      chunk('I am two, topped up.', true),
+      ev('phase.complete', { intentId: 'i1', affirmationSetId: 's1', totalDurationMs: 1 }),
+    ]);
+    expect(buffer).toContain('Affirmations: 2');
+  });
+
+  it('settles on deliveredCount over its own tally', () => {
+    const buffer = run([
+      ev('phase.validation'),
+      ev('phase.gatekeeper', { passed: true }),
+      ev('phase.framework_streaming.end', { framework: {} }),
+      chunk('I am one.'),
+      chunk('I am two.'),
+      // Catch-up: real content, but not further composition.
+      chunk('I am three, topped up.', true),
+      chunk('I am four, topped up.', true),
+      ev('phase.output_safety', { flagged: false, concerns: [] }),
+      ev('phase.saved', { intentId: 'i1', affirmationSetId: 's1', deliveredCount: 4 }),
+      ev('phase.complete', {
+        intentId: 'i1',
+        affirmationSetId: 's1',
+        totalDurationMs: 1000,
+      }),
+    ]);
+
+    // ⭐ The summary line the user actually reads is the authoritative count,
+    // not a tally of frames. Both numbers happen to be 4 here for DIFFERENT
+    // reasons — the tally would have said 4 too — so the discriminating case
+    // is the one below, where they diverge.
+    expect(buffer).toContain('Affirmations: 4');
+  });
+
+  it('reports the persisted count when the frame tally disagrees with it', () => {
+    // Two streamed lines, one of which the server's batch derive deduped away,
+    // and no catch-up frames. A frame tally says 2; the truth is 1.
+    const buffer = run([
+      ev('phase.framework_streaming.end', { framework: {} }),
+      chunk('I am one.'),
+      chunk('I am one.'),
+      ev('phase.saved', { intentId: 'i1', affirmationSetId: 's1', deliveredCount: 1 }),
+      ev('phase.complete', {
+        intentId: 'i1',
+        affirmationSetId: 's1',
+        totalDurationMs: 1000,
+      }),
+    ]);
+
+    expect(buffer).toContain('Affirmations: 1');
+    expect(buffer).not.toContain('Affirmations: 2');
+  });
+
+  it('falls back to the pre-final tally when the server sends no deliveredCount', () => {
+    // A server predating nl#416. The count is still bounded away from the
+    // catch-up inflation because `final` is what excludes it — absent here too,
+    // so this is genuinely the old behaviour, and it must not crash or blank.
+    const buffer = run([
+      ev('phase.framework_streaming.end', { framework: {} }),
+      chunk('I am one.'),
+      chunk('I am two.'),
+      ev('phase.saved', { intentId: 'i1', affirmationSetId: 's1' }),
+      ev('phase.complete', {
+        intentId: 'i1',
+        affirmationSetId: 's1',
+        totalDurationMs: 1000,
+      }),
+    ]);
+
+    expect(buffer).toContain('Affirmations: 2');
+  });
+
+  it('announces the blocking top-up round instead of going silent', () => {
+    const buffer = run([
+      ev('phase.framework_streaming.end', { framework: {} }),
+      chunk('I am one.'),
+      ev('phase.affirmations_topup', { round: 1, deficit: 20 }),
+    ]);
+
+    expect(buffer).toContain('20 more');
+  });
+});
