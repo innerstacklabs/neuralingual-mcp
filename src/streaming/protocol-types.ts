@@ -89,8 +89,35 @@ export interface PhaseAffirmationsStreamingChunkEvent {
       grouping: string;
       rationale: string;
     };
+    /**
+     * nl#416 — `true` on the post-Pass-2 catch-up burst: members of the FINAL
+     * set that were never streamed live (top-up items above all).
+     *
+     * ⛔ It marks a different DUPLICATE rule, not "do not count me". Live chunks
+     * are emitted per parsed item, before the batch dedup, so they can repeat and
+     * must be counted by DISTINCT text. A `final` chunk cannot repeat — the burst
+     * emits only rows absent from the server's streamed set — so each one counts.
+     * Counting every frame reported a 100-line playlist as 130; skipping every
+     * `final` frame under-reports the top-up round instead. See
+     * `docs/STREAMING_PROTOCOL.md` → "Counting affirmations".
+     *
+     * Optional: absent from pre-nl#416 servers, and absent means "live".
+     */
+    final?: boolean;
   };
 }
+
+/**
+ * nl#416 — a bounded top-up round is starting: a BLOCKING Anthropic call that
+ * emits no chunks. Before this event that round was ~21 s of total SSE silence,
+ * so the counter froze and a working generation read as a hang. The client
+ * lights the "Final review" stage for its duration.
+ */
+export interface PhaseAffirmationsTopUpEvent {
+  event: 'phase.affirmations_topup';
+  data: { round: number; deficit: number };
+}
+
 
 export interface PhaseOutputSafetyEvent {
   event: 'phase.output_safety';
@@ -108,7 +135,18 @@ export interface PhaseIntentMetadataEvent {
 
 export interface PhaseSavedEvent {
   event: 'phase.saved';
-  data: { intentId: string; affirmationSetId: string };
+  data: {
+    intentId: string;
+    affirmationSetId: string;
+    /**
+     * nl#416 — AUTHORITATIVE persisted affirmation count. A running chunk count
+     * is provisional (a line surviving the per-item filter can still be dropped
+     * by the batch derive), so the client replaces its count with this. Absent
+     * from older servers: then there is no authoritative total and the client
+     * bounds its display by the `targetCount` it requested.
+     */
+    deliveredCount?: number;
+  };
 }
 
 /**
@@ -160,6 +198,17 @@ export interface PhaseFailedEvent {
     /** Credits required — present only on `insufficient_credits` failures
      *  (#2835/FIX-2). */
     required?: number;
+    /**
+     * nl#329 — server-minted correlation ref (`internal_error-7d62937f`). The same string is
+     * the Sentry tag and the api error log field for that failure, so a user quoting it hands
+     * support a search term. Optional: older API builds emit none.
+     *
+     * ⚠️ Mirrored here as well as in `apps/web` because BOTH clients render the failure. The
+     * first cut of nl#329 updated only the web mirror, which would have left CLI users with no
+     * ref to quote — the exact correlation gap the issue was filed to close, still open on one
+     * of the two surfaces, in the commit that closes it.
+     */
+    ref?: string;
   };
 }
 
@@ -170,6 +219,7 @@ export type StreamingProtocolEvent =
   | PhaseFrameworkStreamingChunkEvent
   | PhaseFrameworkStreamingEndEvent
   | PhaseAffirmationsStreamingChunkEvent
+  | PhaseAffirmationsTopUpEvent
   | PhaseOutputSafetyEvent
   | PhaseIntentMetadataEvent
   | PhaseSavedEvent
@@ -209,6 +259,7 @@ export const KNOWN_EVENT_NAMES: ReadonlySet<string> = new Set([
   'phase.framework_streaming.chunk',
   'phase.framework_streaming.end',
   'phase.affirmations_streaming.chunk',
+  'phase.affirmations_topup',
   'phase.output_safety',
   'phase.intent_metadata',
   'phase.saved',

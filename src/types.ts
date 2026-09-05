@@ -25,6 +25,9 @@ export interface Intent {
   rawText: string;
   tonePreference: TonePreference | null;
   sessionContext: SessionContext;
+  // nl#425 — VoicePerspective is declared further down (originally added for
+  // CoachDto, #3116); reused here rather than a second hand-mirrored copy.
+  voicePerspective: VoicePerspective;
   isCatalog: boolean;
   catalogSlug: string | null;
   catalogCategory: string | null;
@@ -63,6 +66,14 @@ export interface AffirmationSet {
   createdAt: string;
   inspirations?: Inspiration[] | null;
   affirmations: Affirmation[];
+  /**
+   * #132 — the coach that authored the set. The YouTube publish path selects
+   * its per-coach visual config from this field and hard-fails when it is null,
+   * so a caller needs to be able to see what was actually persisted. The column
+   * has always been on the wire (the admin client does not strip unknown keys);
+   * this declaration is the type catching up, not a new field.
+   */
+  coachKey?: string | null;
 }
 
 export interface CreateIntentInput {
@@ -71,12 +82,28 @@ export interface CreateIntentInput {
   sessionContext?: SessionContext | undefined;
 }
 
+/**
+ * #132 — options for an admin generation run.
+ *
+ * `coachKey` is the coach recorded on the resulting `AffirmationSet`. OMITTING
+ * it is meaningful and correct on a regenerate: the API then inherits the
+ * previous set's coach (`AdminIntentService.resolveGenerationCoachKey`), so a
+ * regeneration cannot silently drop one that was already established.
+ */
+export interface GenerateAffirmationsInput {
+  coachKey?: string | undefined;
+}
+
 export interface UpdateIntentInput {
   tonePreference?: TonePreference | undefined;
   sessionContext?: SessionContext | undefined;
   title?: string | undefined;
   rawText?: string | undefined;
   emoji?: string | null | undefined;
+  // nl#425 — correcting an existing intent's perspective (mirrors #133's API
+  // route). Generation reads the intent's stored value, so a set cannot be
+  // regenerated in second person without this.
+  voicePerspective?: VoicePerspective | undefined;
 }
 
 /**
@@ -136,7 +163,7 @@ export interface UpdateAffirmationsResult {
   updated: number;
 }
 
-/** #132 — result of repairing an affirmation set's authoring coach. */
+/** #132 / #264 — result of repairing an affirmation set's authoring coach. */
 export interface SetAffirmationSetCoachResult {
   affirmationSetId: string;
   coachKey: string;
@@ -351,6 +378,23 @@ export interface ListVoicesOptions {
 
 export type VoicePerspective = 'first_person' | 'second_person';
 
+/**
+ * nl#425 — user-facing intent DTOs (`IntentDetail` in user-client.ts) don't
+ * carry `voicePerspective` at all, so the two call sites that map one into an
+ * `Intent` (cli.ts's `fetchSetFileDataUser`, user-mcp.ts's `fetchSetFileData`)
+ * need a stand-in. Named here once so both import it rather than each
+ * hardcoding the literal (the DB's own column default, #133 — matches product
+ * default, not a per-call-site decision).
+ */
+export const DEFAULT_USER_INTENT_VOICE_PERSPECTIVE: VoicePerspective = 'second_person';
+
+/** One sized/format portrait variant. Mirrors `coachPortraitVariantDtoSchema` in core. */
+export interface CoachPortraitVariantDto {
+  height: number;
+  jpgPath: string;
+  webpPath: string;
+}
+
 /** Presentation assets for a coach. Mirrors `coachVisualDtoSchema` in core. */
 export interface CoachVisualDto {
   iconRef: string;
@@ -358,6 +402,7 @@ export interface CoachVisualDto {
   aspectRatio: number;
   imagePath: string;
   thumbPath: string;
+  portraits: CoachPortraitVariantDto[];
 }
 
 /**
@@ -382,8 +427,8 @@ export interface CoachDto {
   name: string;
   roleLabel: string;
   tagline: string;
+  angle: string;
   stance: string;
-  bestFor: string[];
   identityKit: { keywords: string[]; signaturePhrase: string };
   description: string;
   inspiredBy: string[];
