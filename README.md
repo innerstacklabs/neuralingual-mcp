@@ -22,6 +22,9 @@ npx @innerstacklabs/neuralingual-mcp login
 # Log in with Apple Sign-In (opens browser)
 neuralingual login
 
+# On a remote host (ssh, container) — prints a URL + code to approve on any device
+neuralingual login --device
+
 # Create a practice set from intent text
 neuralingual create "I want to feel confident before presentations"
 
@@ -44,7 +47,7 @@ neuralingual play <id> --open
 
 | Command | Description |
 |---|---|
-| `login` | Log in via Apple Sign-In |
+| `login` | Log in via Apple Sign-In (browser; `--device` for headless hosts) |
 | `logout` | Log out and clear tokens |
 | `whoami` | Show current user info |
 | `library` | List your practice sets |
@@ -69,6 +72,28 @@ neuralingual play <id> --open
 | `set apply <id>` | Apply YAML changes |
 | `set create` | Create set from YAML |
 | `settings` | View/update preferences |
+
+### Logging in on a remote host (ssh, containers)
+
+Over ssh or in a container, the browser that opens is on a different machine than the
+terminal, so the normal Apple Sign-In flow can't complete. `neuralingual login` detects this
+automatically (any ssh session, or a Linux host with no `DISPLAY`/`WAYLAND_DISPLAY`) and
+switches to a device-code flow — pass `--device` to force it, or `--browser` to force the
+loopback flow instead (passing both is an error).
+
+```
+Open https://app.neuralingual.com/auth/device and enter code ABCD-EFGH
+
+Or open this link directly: https://app.neuralingual.com/auth/device?code=ABCD-EFGH
+
+Waiting for approval (the code expires in 10 minutes)...
+```
+
+Open the URL on any device — phone, laptop, whatever's handy — sign in with Apple, and
+approve. The CLI polls in the background and writes tokens to
+`~/.config/neuralingual/auth.json`, the same file the browser flow writes, so nothing else
+about the CLI changes once you're logged in. The code expires after 10 minutes; if it times
+out, the CLI exits non-zero and tells you to run `neuralingual login` again.
 
 See the [User Guide](docs/USER_GUIDE.md) for detailed usage and examples.
 

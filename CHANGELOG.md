@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- `login --device` — RFC 8628 device-code flow for headless hosts (ssh, containers); auto-detected when no local browser is available
+
 ## [0.5.0] - 2026-05-26
 
 ### Added
