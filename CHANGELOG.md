@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `prepublishOnly` rebuilds `dist/` (build + typecheck) before every `npm publish`, so a publish from a stale checkout can no longer ship stale compiled code
+
 ### Added
 - `login --device` — RFC 8628 device-code flow for headless hosts (ssh, containers); auto-detected when no local browser is available
 
