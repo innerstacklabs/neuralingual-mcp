@@ -48,4 +48,5 @@ This is the **public** package extracted from `innerstacklabs/neuralingual` (pri
 - Auth: OIDC trusted publishing via GitHub Actions (no stored npm token)
 - Workflow: `.github/workflows/publish.yml` triggers on `v*` tags
 - Release: `npm version patch && git push && git push --tags`
+- `prepublishOnly` runs `npm run build && npm run typecheck`, so every `npm publish` (Action or by hand) rebuilds `dist/` first and aborts if either fails. `dist/` is gitignored and published via `files`, so without the hook a publish ships whatever `dist/` is on disk. `npm pack` does not run `prepublishOnly`; use `npm run build` before a manual pack.
 - Prerequisite: trusted publisher must be linked on [npmjs.com package access page](https://www.npmjs.com/package/@innerstacklabs/neuralingual-mcp/access) (org: `innerstacklabs`, repo: `neuralingual-mcp`, workflow: `publish.yml`)

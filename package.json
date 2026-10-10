@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build && npm run typecheck",
     "test": "vitest run"
   },
   "dependencies": {
