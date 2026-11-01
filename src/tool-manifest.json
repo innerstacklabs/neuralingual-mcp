@@ -230,10 +230,8 @@
         "auth": "jwt"
       },
       "handler": {
-        "type": "client-method",
-        "clientMethod": "startRender",
-        "resolveId": true,
-        "responseFormat": "json"
+        "type": "custom",
+        "customHandler": "renderStart"
       }
     },
     {
@@ -259,10 +257,8 @@
         "auth": "jwt"
       },
       "handler": {
-        "type": "client-method",
-        "clientMethod": "getRenderStatus",
-        "resolveId": true,
-        "responseFormat": "json"
+        "type": "custom",
+        "customHandler": "renderStatus"
       }
     },
     {
@@ -288,10 +284,8 @@
         "auth": "jwt"
       },
       "handler": {
-        "type": "client-method",
-        "clientMethod": "startRender",
-        "resolveId": true,
-        "responseFormat": "json"
+        "type": "custom",
+        "customHandler": "rerender"
       }
     },
     {
@@ -345,10 +339,8 @@
         "auth": "jwt"
       },
       "handler": {
-        "type": "client-method",
-        "clientMethod": "shareIntent",
-        "resolveId": true,
-        "responseFormat": "json"
+        "type": "custom",
+        "customHandler": "share"
       }
     },
     {
@@ -374,11 +366,8 @@
         "auth": "jwt"
       },
       "handler": {
-        "type": "client-method",
-        "clientMethod": "unshareIntent",
-        "resolveId": true,
-        "responseFormat": "void",
-        "successMessage": "Share link revoked for {id}."
+        "type": "custom",
+        "customHandler": "unshare"
       }
     },
     {
@@ -926,6 +915,63 @@
       }
     },
     {
+      "name": "nl_setting_preference_save",
+      "description": "Save one setting as the user's explicit default for a session context, so a choice of 'no limit' survives. Unlike nl_context_settings_update (where null clears an override), null here is a saved choice: durationMinutes null is Full Set. Only durationMinutes, repeatCount, paceWpm and pauseMs can be saved this way, and only per context (not globally). To clear an override, use nl_context_settings_update or nl_context_settings_reset.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "string",
+            "enum": [
+              "general",
+              "sleep",
+              "nap",
+              "meditation",
+              "workout",
+              "focus",
+              "walk",
+              "chores"
+            ],
+            "description": "Session context to save the default for"
+          },
+          "setting": {
+            "type": "string",
+            "enum": [
+              "durationMinutes",
+              "repeatCount",
+              "paceWpm",
+              "pauseMs"
+            ],
+            "description": "Setting to save. durationMinutes 1-60, repeatCount 1-5, paceWpm 90-220, pauseMs 500-10000"
+          },
+          "value": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 10000,
+            "description": "Value to save, within the range for the chosen setting. null saves the explicit choice of no custom value (durationMinutes null = Full Set)"
+          }
+        },
+        "required": [
+          "context",
+          "setting",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "endpoint": {
+        "method": "PUT",
+        "path": "/setting-preferences",
+        "auth": "jwt"
+      },
+      "handler": {
+        "type": "custom",
+        "customHandler": "settingPreferenceSave"
+      }
+    },
+    {
       "name": "nl_wizard_defaults",
       "description": "Get the resolved wizard defaults (voice, background, binaural, duration, playback mode). Returns the effective defaults based on a 4-level cascade: intent-specific config > recent config > onboarding preferences > system defaults.",
       "parameters": {
@@ -1422,7 +1468,7 @@
               "theo",
               "ilana"
             ],
-            "description": "Named style archetype to steer the writing style (rhetorical cadence only \u2014 no quotes or impersonation). Choose one: 'cole' \u2014 The Head Coach: Disciplined ownership and calm authority \u2014 demanding, never degrading. 'nia' \u2014 The Mentor: Sees you, and believes you before the evidence comes in. 'theo' \u2014 The Scientist: Tells you why it's working. Warm-curious, evidence-shaped, in your corner. 'ilana' \u2014 The Visionary: Poetic, metaphor-rich, paradoxical \u2014 image-dense and flowing. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
+            "description": "Named style archetype to steer the writing style (rhetorical cadence only \u2014 no quotes or impersonation). Choose one: 'cole' \u2014 The Head Coach: Cole sets a standard and names your first step. Demanding, never harsh. 'nia' \u2014 The Mentor: Nia is your biggest believer. She sees the best in you and says it. 'theo' \u2014 The Scientist: Theo tells you why it works. Every affirmation connects what you're doing to what it's doing to you. 'ilana' \u2014 The Visionary: Ilana sees who you could become, and helps you see it too. Combine with styleNotes to override individual dials. Ignored when affirmations is provided.",
             "note": "Ignored when affirmations is provided."
           },
           "styleNotes": {
@@ -1496,11 +1542,8 @@
         "auth": "jwt"
       },
       "handler": {
-        "type": "client-method",
-        "clientMethod": "deleteIntent",
-        "resolveId": true,
-        "responseFormat": "void",
-        "successMessage": "Deleted playlist {id}."
+        "type": "custom",
+        "customHandler": "playlistDelete"
       }
     },
     {

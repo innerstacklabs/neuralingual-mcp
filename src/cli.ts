@@ -19,6 +19,7 @@ import { UserApiClient, deriveTitleFromText } from './user-client.js';
 import { installEnvTelemetrySink } from './mcp-telemetry.js';
 import { loadAuth, clearAuth } from './auth-store.js';
 import { deviceLogin, shouldUseDeviceFlow } from './device-login.js';
+import { probeStoredToken } from './whoami-probe.js';
 import type { ApiEnv, Intent, LibraryFilter, LibraryQueryParams, RenderStatus, SessionContext, TonePreference } from './types.js';
 import { API_BASE_URLS, DEFAULT_USER_INTENT_VOICE_PERSPECTIVE } from './types.js';
 import { buildRenderInputFromSetFile, hasRenderSettings, serializeSetFile, parseSetFile } from './set-file.js';
@@ -540,7 +541,14 @@ program
 program
   .command('whoami')
   .description('Show current user info')
-  .action(async () => {
+  .option('--no-refresh', 'Read-only token probe: never refreshes or rewrites stored tokens. Exit 0 valid, 1 invalid/expired, 2 unknown')
+  .action(async (opts: { refresh: boolean }) => {
+    if (!opts.refresh) {
+      // nl#599 — read-only probe; see whoami-probe.ts. Must stay ahead of getUserClient().
+      const probe = await probeStoredToken();
+      (probe.exitCode === 0 ? console.log : console.error)(probe.message);
+      process.exit(probe.exitCode);
+    }
     const client = getUserClient();
     try {
       const { user } = await client.getMe();

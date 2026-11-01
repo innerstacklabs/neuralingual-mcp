@@ -12,7 +12,7 @@ export interface JsonSchema {
   type?: string | string[];
   properties?: Record<string, JsonSchema>;
   required?: string[];
-  additionalProperties?: boolean;
+  additionalProperties?: boolean | JsonSchema;
   items?: JsonSchema;
   enum?: unknown[];
   description?: string;
@@ -72,8 +72,17 @@ function propertyToZod(schema: JsonSchema): ZodTypeAny {
       return arr;
     }
 
-    case 'object':
+    case 'object': {
+      // nl#666 — an object with no declared `properties` and `additionalProperties`
+      // true (or a schema) is a free-form map. `z.object({})` would strip every key,
+      // so it becomes a pass-through record. Objects with `properties`, with
+      // `additionalProperties: false`, or with neither keep the closed-object shape.
+      const extra = schema.additionalProperties;
+      if (schema.properties === undefined && extra !== undefined && extra !== false) {
+        return z.record(z.string(), extra === true ? z.unknown() : propertyToZod(extra));
+      }
       return jsonSchemaToZod(schema);
+    }
 
     default:
       return z.unknown();

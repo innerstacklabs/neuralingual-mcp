@@ -248,6 +248,13 @@ export class StreamRenderer {
         this.capturedEmoji = event.data.emoji;
         this.emitPhaseTelemetry('intent_metadata');
         return;
+      case 'phase.progress':
+        // nl#475 — liveness-only heartbeat during the Pass-2 gap before the
+        // first affirmation parses. No visible CLI output (matches
+        // `phase.intent_metadata`'s telemetry-only precedent above); the
+        // progress bar/phase line is already active from `beginPhase`.
+        this.emitPhaseTelemetry('progress');
+        return;
       case 'phase.saved':
         this.beginPhase('Saving');
         this.completePhase('ok');

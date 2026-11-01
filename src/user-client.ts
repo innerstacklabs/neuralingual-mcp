@@ -173,6 +173,7 @@ interface CreditTransaction {
   type: string;
   createdAt: string;
   balanceAfter: number;
+  reversedByTransactionId?: string | null;
 }
 
 interface ShareResult {
@@ -194,6 +195,13 @@ interface ContextSettings {
   binauralVolume: number | null;
   subliminalEnabled: boolean | null;
   subliminalVolume: number | null;
+}
+
+interface SettingPreferenceSaved {
+  setting: string;
+  value: number | null;
+  scope: { kind: 'context'; sessionContext: string };
+  evidence: { revision: number; selectionMethod: string; chosenAt: string };
 }
 
 interface WizardDefaults {
@@ -1061,6 +1069,24 @@ export class UserApiClient {
 
   async deleteContextSettings(context: string): Promise<void> {
     return this.requestVoid('DELETE', `/context-settings/${encodeURIComponent(context)}`);
+  }
+
+  /**
+   * Save a per-context default through `PUT /setting-preferences`, the only path that
+   * writes preference evidence (so `null` is a saved choice such as Full Set, not an
+   * unset). Context scope only; the route refuses `global` and the eight settings
+   * outside `CONTEXT_CASCADE_SETTINGS`, and this method never sends them.
+   */
+  async saveSettingPreference(
+    context: string,
+    setting: string,
+    value: number | null,
+  ): Promise<SettingPreferenceSaved> {
+    return this.request('PUT', '/setting-preferences', {
+      setting,
+      value,
+      scope: { kind: 'context', sessionContext: context },
+    });
   }
 
   // --- Wizard Defaults ---

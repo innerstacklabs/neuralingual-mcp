@@ -6,18 +6,34 @@
  * This is the single source of truth for tool definitions — the public
  * repo (neuralingual-mcp) will consume this manifest in Phase 2.
  *
- * Handler types:
- * - "client-method": generic pass-through to UserApiClient methods
- * - "custom": tool-specific logic defined in CUSTOM_HANDLERS
+ * Handlers use tool-specific logic defined in CUSTOM_HANDLERS.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { UserApiClient, deriveTitleFromText } from './user-client.js';
+import {
+  nlCoachViewResultSchema,
+  nlCoachesResultSchema,
+  nlPlaylistDeleteResultSchema,
+  nlRenderStartResultSchema,
+  nlRenderStatusResultSchema,
+  nlShareResultSchema,
+  nlUnshareResultSchema,
+  renderJobStatusEnum,
+  renderStatusApiSchema,
+  shareIntentApiSchema,
+  startRenderApiSchema,
+  toMcpOutputSchema,
+  toMcpToolError,
+  typedToolResult,
+  type McpToolError,
+} from './mcp-tool-result.js';
 import { loadAuth } from './auth-store.js';
 import { buildRenderInputFromSetFile, hasRenderSettings, serializeSetFile, parseSetFile } from './set-file.js';
 import { jsonSchemaToInputSchema, type JsonSchema } from './json-schema-to-zod.js';
@@ -75,9 +91,27 @@ async function withClient<T>(fn: (client: UserApiClient) => Promise<T>) {
   try {
     return await fn(getClient());
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return errorResult(msg);
+    return errorResult(toMcpToolError(err).message);
   }
+}
+
+export async function withTypedClient<T>(
+  fn: (client: UserApiClient) => Promise<T>,
+): Promise<T | McpToolError> {
+  try {
+    return await fn(getClient());
+  } catch (err: unknown) {
+    return toMcpToolError(err);
+  }
+}
+
+function isMcpToolError(result: unknown): result is McpToolError {
+  return (
+    typeof result === 'object' &&
+    result !== null &&
+    'kind' in result &&
+    result.kind === 'error'
+  );
 }
 
 /**
@@ -320,13 +354,237 @@ async function applySetFile(
 
 type CustomHandlerFn = (params: Record<string, unknown>) => Promise<{
   content: Array<{ type: 'text'; text: string }>;
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }>;
 
+/**
+ * Shared "the API responded but not in the shape we validate against" error.
+ * Used by every custom handler that safeParses a raw API response before
+ * building its success branch.
+ */
+function invalidResponseError(message: string): {
+  kind: 'error';
+  code: 'invalid_response';
+  message: string;
+  status: null;
+  retryable: false;
+} {
+  return { kind: 'error', code: 'invalid_response', message, status: null, retryable: false };
+}
+
+// ── Tool argument schemas (nl#178) ────────────────────────────────────────
+// One typed zod schema per custom handler, parsed once at the top of the
+// handler. Each mirrors the tool's `parameters` entry in tool-manifest.json
+// as `buildUserServer` turns it into zod via `jsonSchemaToInputSchema`: the
+// same types, enums, string lengths, number bounds and `minItems`, and the
+// same required set. That converter does not apply `format` or `maxItems`,
+// so neither do these schemas: the SDK already checks every argument against
+// the converted schema before a handler runs, and a schema stricter than that
+// would change what a client sees. `user-mcp-args.test.ts` pins both facts.
+// Unknown keys are stripped, as they are on the wire.
+
+const playlistIdArgs = z.object({ id: z.string().min(1) });
+const sessionContextSchema = z.enum([
+  'general',
+  'sleep',
+  'nap',
+  'meditation',
+  'workout',
+  'focus',
+  'walk',
+  'chores',
+]);
+
+// The coach roster comes from tool-manifest.json, the one generated copy of it the
+// public package may hold (see CoachDto in types.ts; #183). This file is synced as-is
+// to the public repo, which cannot resolve a workspace package (#194), and
+// scripts/gen-coaches.test.ts forbids a second literal z.enum over coach keys.
+function manifestCoachKeys(): [string, ...string[]] {
+  const tool = (manifest as ToolManifest).tools.find((t) => t.name === 'nl_playlist_create');
+  const coachKey = tool?.parameters.properties?.['coachKey'] as { enum?: unknown } | undefined;
+  const keys = coachKey?.enum;
+  if (!Array.isArray(keys) || keys.length === 0 || !keys.every((k) => typeof k === 'string')) {
+    throw new Error('tool-manifest.json: nl_playlist_create.coachKey has no string enum');
+  }
+  return keys as [string, ...string[]];
+}
+const coachKeySchema = z.enum(manifestCoachKeys());
+
+const searchArgs = z.object({ query: z.string().min(1) });
+
+const voicesArgs = z.object({
+  gender: z.string().optional(),
+  accent: z.string().optional(),
+  tier: z.string().optional(),
+});
+
+const createArgs = z.object({
+  text: z.string().min(1).max(500).optional(),
+  title: z.string().min(1).max(120).optional(),
+  tone: z.enum(['grounded', 'open', 'mystical']).optional(),
+  sourceText: z.string().min(1).max(16000).optional(),
+  sourceTitle: z.string().max(200).optional(),
+  sourceAuthor: z.string().max(200).optional(),
+  sourceUrl: z.string().optional(),
+  sourcePdf: z.string().optional(),
+  sourceYoutube: z.string().optional(),
+  style: coachKeySchema.optional(),
+  styleNotes: z.record(z.string(), z.unknown()).optional(),
+  coachKey: coachKeySchema.optional(),
+  affirmations: z.array(z.string().min(1).max(240)).min(1).optional(),
+  voicePerspective: z.enum(['first_person', 'second_person']).optional(),
+});
+
+const syncAffirmationsArgs = z.object({
+  id: z.string().min(1),
+  affirmations: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        text: z.string().min(1),
+        enabled: z.boolean(),
+      }),
+    )
+    .min(1),
+});
+
+const renderConfigureArgs = z.object({
+  id: z.string().min(1),
+  voiceId: z.string().min(1),
+  sessionContext: sessionContextSchema,
+  durationMinutes: z.number().int().min(1).max(120),
+  paceWpm: z.number().int().min(90).max(220).optional(),
+  backgroundAudioPath: z.string().nullable().optional(),
+  backgroundVolume: z.number().min(0).max(1).optional(),
+  affirmationRepeatCount: z.number().int().min(1).max(5).optional(),
+  includePreamble: z.boolean().optional(),
+  playAll: z.boolean().optional(),
+});
+
+const setExportArgs = z.object({
+  id: z.string().min(1),
+  withFramework: z.boolean().optional(),
+});
+
+const setImportArgs = z.object({
+  id: z.string().min(1),
+  yaml: z.string().min(1),
+});
+
+const userSetUsernameArgs = z.object({ username: z.string().min(3).max(30) });
+
+const userCheckUsernameArgs = z.object({ username: z.string().min(1) });
+
+const catalogBrowseArgs = z.object({
+  category: z.string().optional(),
+  context: sessionContextSchema.optional(),
+  sort: z.enum(['recent', 'created', 'most-played', 'last-played', 'title']).optional(),
+  filter: z.enum(['has-audio', 'no-audio', 'never-played']).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  offset: z.number().int().min(0).optional(),
+});
+
+const catalogSlugArgs = z.object({ slug: z.string().min(1) });
+
+/**
+ * Argument schema of each handler converted so far, keyed by the manifest's
+ * `customHandler` name. `user-mcp-args.test.ts` compares every entry with its
+ * manifest entry.
+ */
+export const USER_MCP_ARG_SCHEMAS = {
+  renderStart: playlistIdArgs,
+  rerender: playlistIdArgs,
+  guide: playlistIdArgs,
+  search: searchArgs,
+  voices: voicesArgs,
+  create: createArgs,
+  syncAffirmations: syncAffirmationsArgs,
+  renderConfigure: renderConfigureArgs,
+  play: playlistIdArgs,
+  setExport: setExportArgs,
+  setImport: setImportArgs,
+  userSetUsername: userSetUsernameArgs,
+  userCheckUsername: userCheckUsernameArgs,
+  catalogBrowse: catalogBrowseArgs,
+  catalogView: catalogSlugArgs,
+  catalogCopy: catalogSlugArgs,
+  libraryView: playlistIdArgs,
+} as const;
+
+type CustomHandlerResult = Awaited<ReturnType<CustomHandlerFn>>;
+
+/**
+ * Parse a handler's argument bag once. A failure becomes the canonical tool
+ * error (`kind: 'error'`, the `McpErrorShape` fields from mcp-error.ts), so a
+ * direct caller that bypasses the SDK gets an error result instead of a value
+ * used as the wrong type.
+ */
+function parseToolArgs<S extends z.ZodType>(
+  schema: S,
+  params: Record<string, unknown>,
+): { ok: true; args: z.output<S> } | { ok: false; result: CustomHandlerResult } {
+  const parsed = schema.safeParse(params);
+  if (parsed.success) return { ok: true, args: parsed.data };
+  const detail = parsed.error.issues
+    .map((issue) => `${issue.path.join('.') || '(arguments)'}: ${issue.message}`)
+    .join('; ');
+  const message = `Invalid arguments: ${detail}`;
+  const error: McpToolError = {
+    kind: 'error',
+    code: 'validation',
+    message,
+    status: null,
+    retryable: false,
+  };
+  return { ok: false, result: typedToolResult(error, message) };
+}
+
+// Shared by the `renderStart` and `rerender` CUSTOM_HANDLERS entries — both
+// tools start a render the same way; `nl_rerender` is just the retry-facing
+// name for the same operation.
+const startRenderHandler: CustomHandlerFn = async (params) => {
+  const parsedArgs = parseToolArgs(playlistIdArgs, params);
+  if (!parsedArgs.ok) return parsedArgs.result;
+  const { id } = parsedArgs.args;
+  const result = await withTypedClient(async (client) => {
+    const resolvedId = await resolveIntentId(client, id);
+    return client.startRender(resolvedId);
+  });
+  if (isMcpToolError(result)) {
+    return typedToolResult(result, result.message);
+  }
+
+  const parsed = startRenderApiSchema.safeParse(result);
+  if (!parsed.success) {
+    const message = 'Render start response did not match the expected shape.';
+    return typedToolResult(invalidResponseError(message), message);
+  }
+
+  const output = { kind: 'ok' as const, ...parsed.data };
+  return typedToolResult(output, JSON.stringify(output, null, 2));
+};
+
+/**
+ * The settings `PUT /setting-preferences` accepts (core's `CONTEXT_CASCADE_SETTINGS`).
+ * Spelled out here because the public package cannot import core (#194);
+ * `tool-manifest.test.ts` asserts this list equals core's constant in the monorepo.
+ * The route refuses the other eight settings and `global` scope — this tool never widens that.
+ */
+export const SETTING_PREFERENCE_SAVE_SETTINGS = [
+  'durationMinutes',
+  'repeatCount',
+  'paceWpm',
+  'pauseMs',
+] as const;
+
 export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
-  guide: async (params) =>
-    withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
+  guide: async (params) => {
+    const parsedArgs = parseToolArgs(playlistIdArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { id } = parsedArgs.args;
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, id);
       const { intent } = await client.getIntent(resolvedId);
       if (!intent) {
         return errorResult('Playlist not found. Use nl_playlist_list to see available sets.');
@@ -334,11 +592,14 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const latestSet = intent.affirmationSets[0];
       const framework = latestSet?.framework ?? null;
       return textResult(renderFrameworkMarkdown(framework));
-    }),
+    });
+  },
 
-  search: async (params) =>
-    withClient(async (client) => {
-      const query = params['query'] as string;
+  search: async (params) => {
+    const parsedArgs = parseToolArgs(searchArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { query } = parsedArgs.args;
+    return withClient(async (client) => {
       const { items } = await client.getLibrary();
       const q = query.toLowerCase();
       const matches = items.filter(
@@ -360,9 +621,13 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
           ? `No playlists found matching "${query}".`
           : JSON.stringify(summary, null, 2),
       );
-    }),
+    });
+  },
 
   voices: async (params) => {
+    const parsedArgs = parseToolArgs(voicesArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { gender, accent, tier } = parsedArgs.args;
     try {
       const auth = loadAuth();
       const baseUrl = API_BASE_URLS[auth?.env ?? 'production'];
@@ -370,9 +635,6 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { voices: Array<Record<string, unknown>> };
       let voices = data.voices;
-      const gender = params['gender'] as string | undefined;
-      const accent = params['accent'] as string | undefined;
-      const tier = params['tier'] as string | undefined;
       if (gender) {
         const g = gender.toLowerCase();
         voices = voices.filter((v) => String(v['gender'] ?? '').toLowerCase() === g);
@@ -397,29 +659,27 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
     // is actually a missing-argument error — misleading, and it made the test
     // for this guard pass only on machines that happen to have auth.json
     // (green locally, red in clean CI).
-    const affirmationsArg = params['affirmations'] as string[] | undefined;
-    if (affirmationsArg && affirmationsArg.length > 0 && !params['text']) {
-      return errorResult('Please provide text (the playlist intent) when creating from affirmations.');
-    }
-    return withClient(async (client) => {
-      const text = params['text'] as string | undefined;
-      const tone = params['tone'] as string | undefined;
-      const sourceText = params['sourceText'] as string | undefined;
-      const sourceUrl = params['sourceUrl'] as string | undefined;
-      const sourcePdf = params['sourcePdf'] as string | undefined;
-      const sourceYoutube = params['sourceYoutube'] as string | undefined;
-      const sourceTitle = params['sourceTitle'] as string | undefined;
-      const sourceAuthor = params['sourceAuthor'] as string | undefined;
+    const parsedArgs = parseToolArgs(createArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const {
+      text,
+      tone,
+      sourceText,
+      sourceUrl,
+      sourcePdf,
+      sourceYoutube,
+      sourceTitle,
+      sourceAuthor,
       // #3062 — Optional rhetorical-style steering: a named preset and/or
       // free-form dials. Resolved + validated server-side (unknown preset,
       // over-bounds, or injection → 400).
-      const style = params['style'] as string | undefined;
-      const styleNotes = params['styleNotes'] as Record<string, unknown> | undefined;
+      style,
+      styleNotes,
       // #3111 — Optional per-generation coach override. Resolved tolerantly
       // server-side (unknown/stale → falls back to the user's last-used coach,
       // no error). nl#304: a generation stamps that coach as last-used, so there
       // is no separate "set as default" knob to pass.
-      const coachKey = params['coachKey'] as string | undefined;
+      coachKey,
       // #40 — Optional affirmations[]: create the playlist directly from
       // user-authored affirmations, skipping generation and the credit
       // charge entirely (nl_playlist_create).
@@ -428,9 +688,14 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       // rather than rejected — a caller may legitimately pass along the
       // source it drew affirmations from for context without wanting
       // generation to run against it.
-      const affirmations = params['affirmations'] as string[] | undefined;
-      const title = params['title'] as string | undefined;
-
+      affirmations,
+      title,
+      voicePerspective,
+    } = parsedArgs.args;
+    if (affirmations && affirmations.length > 0 && !text) {
+      return errorResult('Please provide text (the playlist intent) when creating from affirmations.');
+    }
+    return withClient(async (client) => {
       if (affirmations && affirmations.length > 0) {
         // Unreachable in practice — the same condition is checked before
         // withClient above (so a missing arg isn't reported as an auth
@@ -443,7 +708,6 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         // never passed it, and there was no tool param to set it. A coach
         // authoring second-person affirmations ("You train from love") got them
         // stored as first_person. Generation-path defaults do not apply here.
-        const voicePerspective = params['voicePerspective'] as string | undefined;
         const result = await client.createManualIntent({
           title: title ?? deriveTitleFromText(text),
           rawText: text,
@@ -551,41 +815,46 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
     });
   },
 
-  syncAffirmations: async (params) =>
-    withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
-      const affirmations = params['affirmations'] as Array<{
-        id?: string;
-        text: string;
-        enabled: boolean;
-      }>;
+  syncAffirmations: async (params) => {
+    const parsedArgs = parseToolArgs(syncAffirmationsArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { id, affirmations } = parsedArgs.args;
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, id);
       const result = await client.syncAffirmations(resolvedId, { affirmations });
       return textResult(
         `Sync complete: ${result.added} added, ${result.updated} updated, ${result.removed} removed.`,
       );
-    }),
+    });
+  },
 
-  renderConfigure: async (params) =>
-    withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
+  renderConfigure: async (params) => {
+    const parsedArgs = parseToolArgs(renderConfigureArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const args = parsedArgs.args;
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, args.id);
       const input: RenderConfigInput = {
-        voiceId: params['voiceId'] as string,
-        sessionContext: params['sessionContext'] as SessionContext,
-        durationMinutes: params['durationMinutes'] as number,
+        voiceId: args.voiceId,
+        sessionContext: args.sessionContext,
+        durationMinutes: args.durationMinutes,
       };
-      if (params['paceWpm'] !== undefined) input.paceWpm = params['paceWpm'] as number;
-      if (params['backgroundAudioPath'] !== undefined) input.backgroundAudioPath = params['backgroundAudioPath'] as string | null;
-      if (params['backgroundVolume'] !== undefined) input.backgroundVolume = params['backgroundVolume'] as number;
-      if (params['affirmationRepeatCount'] !== undefined) input.affirmationRepeatCount = params['affirmationRepeatCount'] as number;
-      if (params['includePreamble'] !== undefined) input.includePreamble = params['includePreamble'] as boolean;
-      if (params['playAll'] !== undefined) input.playAll = params['playAll'] as boolean;
+      if (args.paceWpm !== undefined) input.paceWpm = args.paceWpm;
+      if (args.backgroundAudioPath !== undefined) input.backgroundAudioPath = args.backgroundAudioPath;
+      if (args.backgroundVolume !== undefined) input.backgroundVolume = args.backgroundVolume;
+      if (args.affirmationRepeatCount !== undefined) input.affirmationRepeatCount = args.affirmationRepeatCount;
+      if (args.includePreamble !== undefined) input.includePreamble = args.includePreamble;
+      if (args.playAll !== undefined) input.playAll = args.playAll;
       const result = await client.configureRender(resolvedId, input);
       return textResult(JSON.stringify(result, null, 2));
-    }),
+    });
+  },
 
-  play: async (params) =>
-    withClient(async (client) => {
-      const id = params['id'] as string;
+  play: async (params) => {
+    const parsedArgs = parseToolArgs(playlistIdArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { id } = parsedArgs.args;
+    return withClient(async (client) => {
       const { items } = await client.getLibrary();
       let item = items.find((i) => i.intent.id === id);
       if (!item) {
@@ -619,7 +888,8 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       writeFileSync(cacheFile, audio);
 
       return textResult(JSON.stringify({ path: cacheFile, cached: false }, null, 2));
-    }),
+    });
+  },
 
   credits: async () =>
     withClient(async (client) => {
@@ -641,10 +911,12 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       );
     }),
 
-  setExport: async (params) =>
-    withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
-      const withFramework = params['withFramework'] === true;
+  setExport: async (params) => {
+    const parsedArgs = parseToolArgs(setExportArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { id, withFramework } = parsedArgs.args;
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, id);
       const { data, framework } = await fetchSetFileData(client, resolvedId);
       const yaml = serializeSetFile(data);
 
@@ -658,15 +930,20 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       // — that's documented in the tool description.
       const markdown = renderFrameworkMarkdown(framework);
       return textResult(`${markdown}\n${yaml}`);
-    }),
+    });
+  },
 
-  setImport: async (params) =>
-    withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
+  setImport: async (params) => {
+    const parsedArgs = parseToolArgs(setImportArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { id, yaml } = parsedArgs.args;
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, id);
       const { data: originalData } = await fetchSetFileData(client, resolvedId);
-      const result = await applySetFile(client, resolvedId, params['yaml'] as string, originalData);
+      const result = await applySetFile(client, resolvedId, yaml, originalData);
       return textResult(result);
-    }),
+    });
+  },
 
   // ── Username tools (#2138) ──────────────────────────────────────────
 
@@ -694,9 +971,11 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       );
     }),
 
-  userSetUsername: async (params) =>
-    withClient(async (client) => {
-      const username = params['username'] as string;
+  userSetUsername: async (params) => {
+    const parsedArgs = parseToolArgs(userSetUsernameArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { username } = parsedArgs.args;
+    return withClient(async (client) => {
       const result = await client.setUsername(username);
       return textResult(
         JSON.stringify(
@@ -708,25 +987,26 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
           2,
         ),
       );
-    }),
+    });
+  },
 
-  userCheckUsername: async (params) =>
-    withClient(async (client) => {
-      const username = params['username'] as string;
+  userCheckUsername: async (params) => {
+    const parsedArgs = parseToolArgs(userCheckUsernameArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { username } = parsedArgs.args;
+    return withClient(async (client) => {
       const result = await client.checkUsername(username);
       return textResult(JSON.stringify(result, null, 2));
-    }),
+    });
+  },
 
   // ── Catalog tools (#2336) ───────────────────────────────────────────
 
-  catalogBrowse: async (params) =>
-    withClient(async (client) => {
-      const category = params['category'] as string | undefined;
-      const context = params['context'] as string | undefined;
-      const sort = params['sort'] as string | undefined;
-      const filter = params['filter'] as string | undefined;
-      const limit = (params['limit'] as number | undefined) ?? 20;
-      const offset = (params['offset'] as number | undefined) ?? 0;
+  catalogBrowse: async (params) => {
+    const parsedArgs = parseToolArgs(catalogBrowseArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { category, context, sort, filter, limit = 20, offset = 0 } = parsedArgs.args;
+    return withClient(async (client) => {
       const data = await client.catalogBrowse({
         ...(context ? { context } : {}),
         ...(sort ? { sort } : {}),
@@ -755,21 +1035,28 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         durationSeconds: s['durationSeconds'],
       }));
       return textResult(JSON.stringify({ items: summary, total, limit, offset }, null, 2));
-    }),
+    });
+  },
 
-  catalogView: async (params) =>
-    withClient(async (client) => {
-      const slug = params['slug'] as string;
+  catalogView: async (params) => {
+    const parsedArgs = parseToolArgs(catalogSlugArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { slug } = parsedArgs.args;
+    return withClient(async (client) => {
       const data = await client.catalogView(slug);
       return textResult(JSON.stringify(data, null, 2));
-    }),
+    });
+  },
 
-  catalogCopy: async (params) =>
-    withClient(async (client) => {
-      const slug = params['slug'] as string;
+  catalogCopy: async (params) => {
+    const parsedArgs = parseToolArgs(catalogSlugArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { slug } = parsedArgs.args;
+    return withClient(async (client) => {
       const result = await client.catalogCopy(slug);
       return textResult(JSON.stringify(result, null, 2));
-    }),
+    });
+  },
 
   // ── Library tools (#2209) ───────────────────────────────────────────
 
@@ -791,9 +1078,12 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       return textResult(JSON.stringify(summary, null, 2));
     }),
 
-  libraryView: async (params) =>
-    withClient(async (client) => {
-      const resolvedId = await resolveIntentId(client, params['id'] as string);
+  libraryView: async (params) => {
+    const parsedArgs = parseToolArgs(playlistIdArgs, params);
+    if (!parsedArgs.ok) return parsedArgs.result;
+    const { id } = parsedArgs.args;
+    return withClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, id);
       const { intent, stats } = await client.getIntent(resolvedId);
       if (!intent) {
         return errorResult('Playlist not found. Use nl_playlist_list to see available sets.');
@@ -835,7 +1125,8 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         updatedAt: intent.updatedAt,
       };
       return textResult(JSON.stringify(response, null, 2));
-    }),
+    });
+  },
 
   // ── Affirmation management tools (#2209) ────────────────────────────
 
@@ -942,6 +1233,32 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
       const context = params['context'] as string;
       await client.deleteContextSettings(context);
       return textResult(`Context "${context}" reset to system defaults.`);
+    }),
+
+  // PUT /setting-preferences writes evidence, so a null is a saved choice (Full Set), not an unset.
+  settingPreferenceSave: async (params) =>
+    withClient(async (client) => {
+      const context = params['context'];
+      const setting = params['setting'];
+      const value = params['value'];
+      if (typeof context !== 'string' || context === '') {
+        return errorResult('context is required.');
+      }
+      if (
+        typeof setting !== 'string' ||
+        !(SETTING_PREFERENCE_SAVE_SETTINGS as readonly string[]).includes(setting)
+      ) {
+        return errorResult(
+          `setting must be one of: ${SETTING_PREFERENCE_SAVE_SETTINGS.join(', ')}.`,
+        );
+      }
+      // `undefined` is not `null`: an omitted value must not be sent as a Full Set choice.
+      if (value !== null && typeof value !== 'number') {
+        return errorResult('value is required: a number, or null to save the no-custom-value choice.');
+      }
+
+      const saved = await client.saveSettingPreference(context, setting, value);
+      return textResult(JSON.stringify(saved, null, 2));
     }),
 
   wizardDefaults: async (params) =>
@@ -1104,19 +1421,9 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
 
   // ── #3116 — Coach catalog tools ──────────────────────────────────────────
 
-  coaches: async () =>
-    withClient(async (client) => {
-      let coaches;
-      try {
-        const result = await client.getCoaches();
-        coaches = result.coaches;
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('404') || msg.includes('Not found')) {
-          return textResult('The coaches feature is not enabled for your account. Contact support or wait for the feature rollout.');
-        }
-        throw err;
-      }
+  coaches: async () => {
+    const result = await withTypedClient(async (client) => {
+      const { coaches } = await client.getCoaches();
 
       // nl#304 — mark the coach this user last generated with. It is NOT a
       // "default" any more: nothing sets it directly, it is stamped by the
@@ -1129,45 +1436,140 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         // Non-fatal — still show coaches without the last-used marker.
       }
 
-      const output = {
-        lastCoachKey,
-        coaches: coaches.map((c) => ({
-          ...c,
-          isLastUsed: c.key === lastCoachKey,
-        })),
-      };
-      return textResult(JSON.stringify(output, null, 2));
-    }),
-
-  coachView: async (params) =>
-    withClient(async (client) => {
-      const key = params['key'] as string;
-      if (!key) {
-        // ⛔ Do NOT name example keys here. This file is synced to the public repo,
-        // where `@neuralingual/core` does not exist, so the roster cannot be imported —
-        // a hand-written example list is a roster copy that nothing can keep honest, and
-        // this one had drifted to naming only three of the four (#272). `nl_coaches`
-        // returns the live list, and the unknown-key branch below names it from the
-        // server response.
-        return errorResult('Please provide a coach key. Run nl_coaches to list them.');
+      return { coaches, lastCoachKey };
+    });
+    if (isMcpToolError(result)) {
+      if (result.status === 404) {
+        const message =
+          'The coaches feature is not enabled for your account. Contact support or wait for the feature rollout.';
+        return typedToolResult({ kind: 'feature_gated', message }, message);
       }
+      return typedToolResult(result, result.message);
+    }
 
-      let coaches;
-      try {
-        const result = await client.getCoaches();
-        coaches = result.coaches;
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('404') || msg.includes('Not found')) {
-          return textResult('The coaches feature is not enabled for your account. Contact support or wait for the feature rollout.');
-        }
-        throw err;
-      }
+    const mapped = result.coaches.map((coach) => ({
+      ...coach,
+      isLastUsed: coach.key === result.lastCoachKey,
+    }));
+    const output = { kind: 'ok' as const, lastCoachKey: result.lastCoachKey, coaches: mapped };
+    return typedToolResult(
+      output,
+      JSON.stringify({ lastCoachKey: result.lastCoachKey, coaches: mapped }, null, 2),
+    );
+  },
 
-      const coach = coaches.find((c) => c.key === key);
+  // `nl_render_start` and `nl_rerender` map to the same client call
+  // (starting a render is the same operation whether it's the first attempt
+  // or a retry) — one implementation, aliased under both keys below.
+  renderStart: startRenderHandler,
+  rerender: startRenderHandler,
+
+  renderStatus: async (params) => {
+    const result = await withTypedClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      return client.getRenderStatus(resolvedId);
+    });
+    if (isMcpToolError(result)) {
+      return typedToolResult(result, result.message);
+    }
+
+    const parsed = renderStatusApiSchema.safeParse(result);
+    if (!parsed.success) {
+      const message = 'Render status response did not match the expected shape.';
+      return typedToolResult(invalidResponseError(message), message);
+    }
+    if (parsed.data.status === 'none') {
+      return typedToolResult({ kind: 'no_render_job' }, 'No render job for this playlist.');
+    }
+
+    const status = renderJobStatusEnum.safeParse(parsed.data.status);
+    if (!status.success) {
+      const output = { kind: 'unknown_status' as const, raw: parsed.data.status };
+      return typedToolResult(output, JSON.stringify(output, null, 2));
+    }
+
+    const output = {
+      kind: 'ok' as const,
+      status: status.data,
+      progress: parsed.data.progress,
+      outputKey: parsed.data.outputKey ?? null,
+      errorMessage: parsed.data.errorMessage ?? null,
+      ...(parsed.data.jobId !== undefined ? { jobId: parsed.data.jobId } : {}),
+    };
+    return typedToolResult(output, JSON.stringify(output, null, 2));
+  },
+
+  share: async (params) => {
+    const result = await withTypedClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      return client.shareIntent(resolvedId);
+    });
+    if (isMcpToolError(result)) {
+      return typedToolResult(result, result.message);
+    }
+
+    const parsed = shareIntentApiSchema.safeParse(result);
+    if (!parsed.success) {
+      const message = 'Share response did not match the expected shape.';
+      return typedToolResult(invalidResponseError(message), message);
+    }
+
+    const output = { kind: 'ok' as const, ...parsed.data };
+    return typedToolResult(output, JSON.stringify(output, null, 2));
+  },
+
+  unshare: async (params) => {
+    const result = await withTypedClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      return client.unshareIntent(resolvedId);
+    });
+    if (isMcpToolError(result)) {
+      return typedToolResult(result, result.message);
+    }
+
+    return typedToolResult({ kind: 'ok' }, 'Share link revoked.');
+  },
+
+  playlistDelete: async (params) => {
+    const result = await withTypedClient(async (client) => {
+      const resolvedId = await resolveIntentId(client, params['id'] as string);
+      await client.deleteIntent(resolvedId);
+      return { resolvedId };
+    });
+    if (isMcpToolError(result)) {
+      return typedToolResult(result, result.message);
+    }
+
+    return typedToolResult({ kind: 'ok' }, `Deleted playlist ${result.resolvedId}.`);
+  },
+
+  coachView: async (params) => {
+    const key = params['key'] as string | undefined;
+    if (!key) {
+      // ⛔ Do NOT name example keys here. This file is synced to the public repo,
+      // where `@neuralingual/core` does not exist, so the roster cannot be imported —
+      // a hand-written example list is a roster copy that nothing can keep honest, and
+      // this one had drifted to naming only three of the four (#272). `nl_coaches`
+      // returns the live list, and the unknown-key branch below names it from the
+      // server response.
+      const message = 'Please provide a coach key. Run nl_coaches to list them.';
+      return typedToolResult(
+        {
+          kind: 'error',
+          code: 'validation',
+          message,
+          status: null,
+          retryable: false,
+        },
+        message,
+      );
+    }
+
+    const result = await withTypedClient(async (client) => {
+      const { coaches } = await client.getCoaches();
+      const coach = coaches.find((candidate) => candidate.key === key);
       if (!coach) {
-        const validKeys = coaches.map((c) => c.key).join(', ');
-        return errorResult(`Unknown coach key "${key}". Valid keys: ${validKeys}`);
+        return { coach: null, validKeys: coaches.map((candidate) => candidate.key) };
       }
 
       // nl#304 — last-used, not default. See the note in `coaches` above.
@@ -1179,9 +1581,31 @@ export const CUSTOM_HANDLERS: Record<string, CustomHandlerFn> = {
         // Non-fatal.
       }
 
-      const output = { ...coach, isLastUsed };
-      return textResult(JSON.stringify(output, null, 2));
-    }),
+      return { coach, validKeys: coaches.map((candidate) => candidate.key), isLastUsed };
+    });
+    if (isMcpToolError(result)) {
+      if (result.status === 404) {
+        const message =
+          'The coaches feature is not enabled for your account. Contact support or wait for the feature rollout.';
+        return typedToolResult({ kind: 'feature_gated', message }, message);
+      }
+      return typedToolResult(result, result.message);
+    }
+
+    if (!result.coach) {
+      const output = { kind: 'not_found' as const, validKeys: result.validKeys };
+      return typedToolResult(
+        output,
+        `Unknown coach key "${key}". Valid keys: ${result.validKeys.join(', ')}`,
+      );
+    }
+
+    const output = { kind: 'ok' as const, ...result.coach, isLastUsed: result.isLastUsed };
+    return typedToolResult(
+      output,
+      JSON.stringify({ ...result.coach, isLastUsed: result.isLastUsed }, null, 2),
+    );
+  },
 };
 
 // ── Manifest types ────────────────────────────────────────────────────────
@@ -1203,23 +1627,26 @@ interface ToolManifestEntry {
     additionalProperties?: boolean;
   };
   endpoint: EndpointDef;
-  handler:
-    | {
-        type: 'client-method';
-        clientMethod: string;
-        resolveId: boolean;
-        responseFormat: 'json' | 'void';
-        successMessage?: string;
-      }
-    | {
-        type: 'custom';
-        customHandler: string;
-      };
+  handler: {
+    type: 'custom';
+    customHandler: string;
+  };
 }
 
 interface ToolManifest {
   tools: ToolManifestEntry[];
 }
+
+export const TYPED_OUTPUT_SCHEMAS: Record<string, z.ZodTypeAny> = {
+  nl_coach_view: nlCoachViewResultSchema,
+  nl_coaches: nlCoachesResultSchema,
+  nl_playlist_delete: nlPlaylistDeleteResultSchema,
+  nl_render_start: nlRenderStartResultSchema,
+  nl_render_status: nlRenderStatusResultSchema,
+  nl_rerender: nlRenderStartResultSchema,
+  nl_share: nlShareResultSchema,
+  nl_unshare: nlUnshareResultSchema,
+};
 
 // ── Server Builder ────────────────────────────────────────────────────────
 
@@ -1240,58 +1667,29 @@ export function buildUserServer(): McpServer {
 
   for (const tool of tools) {
     const inputSchema = jsonSchemaToInputSchema(tool.parameters as JsonSchema);
+    // TYPED_OUTPUT_SCHEMAS holds the precise discriminated-union result schema for our own
+    // handler code and tests; the SDK's registerTool() only accepts an object-shaped schema
+    // (see toMcpOutputSchema's header for why a bare union silently breaks both tools/list
+    // advertisement and the SDK's own output validation).
+    const resultSchema = TYPED_OUTPUT_SCHEMAS[tool.name];
+    const registration = {
+      description: tool.description,
+      inputSchema,
+      ...(resultSchema ? { outputSchema: toMcpOutputSchema(resultSchema) } : {}),
+    };
 
-    if (tool.handler.type === 'custom') {
-      const handlerFn = CUSTOM_HANDLERS[tool.handler.customHandler];
-      if (!handlerFn) {
-        throw new Error(
-          `Missing custom handler "${tool.handler.customHandler}" for tool "${tool.name}"`,
-        );
-      }
-
-      server.registerTool(
-        tool.name,
-        { description: tool.description, inputSchema },
-        async (params: Record<string, unknown>) => handlerFn(params),
-      );
-    } else {
-      // client-method: generic pass-through
-      const { clientMethod, resolveId, responseFormat, successMessage } = tool.handler;
-
-      server.registerTool(
-        tool.name,
-        { description: tool.description, inputSchema },
-        async (params: Record<string, unknown>) =>
-          withClient(async (client) => {
-            let id = params['id'] as string | undefined;
-
-            if (resolveId && id) {
-              id = await resolveIntentId(client, id);
-            }
-
-            // Call the client method with the resolved ID
-            const method = client[clientMethod as keyof UserApiClient] as (
-              ...args: unknown[]
-            ) => Promise<unknown>;
-
-            let result: unknown;
-            if (id) {
-              result = await method.call(client, id);
-            } else {
-              result = await method.call(client);
-            }
-
-            if (responseFormat === 'void') {
-              const msg = successMessage
-                ? successMessage.replace('{id}', id ?? '')
-                : 'Done.';
-              return textResult(msg);
-            }
-
-            return textResult(JSON.stringify(result, null, 2));
-          }),
+    const handlerFn = CUSTOM_HANDLERS[tool.handler.customHandler];
+    if (!handlerFn) {
+      throw new Error(
+        `Missing custom handler "${tool.handler.customHandler}" for tool "${tool.name}"`,
       );
     }
+
+    server.registerTool(
+      tool.name,
+      registration,
+      async (params: Record<string, unknown>) => handlerFn(params),
+    );
   }
 
   return server;

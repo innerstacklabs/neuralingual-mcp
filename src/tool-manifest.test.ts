@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import manifest from './tool-manifest.json' with { type: 'json' };
-import { UserApiClient } from './user-client.js';
-import { buildUserServer, CUSTOM_HANDLERS } from './user-mcp.js';
+import {
+  buildUserServer,
+  CUSTOM_HANDLERS,
+  TYPED_OUTPUT_SCHEMAS,
+  SETTING_PREFERENCE_SAVE_SETTINGS,
+} from './user-mcp.js';
 import { jsonSchemaToInputSchema, type JsonSchema } from './json-schema-to-zod.js';
 
 const EXPECTED_TOOL_NAMES = [
@@ -28,6 +32,7 @@ const EXPECTED_TOOL_NAMES = [
   'nl_context_settings_list',
   'nl_context_settings_update',
   'nl_context_settings_reset',
+  'nl_setting_preference_save',
   'nl_wizard_defaults',
   'nl_source_extract',
   'nl_source_youtube',
@@ -75,8 +80,8 @@ const RETIRED_NAMES = [
 ];
 
 describe('MCP Tool Manifest', () => {
-  it('should have exactly 43 tools', () => {
-    expect(manifest.tools).toHaveLength(43);
+  it('should have exactly 44 tools', () => {
+    expect(manifest.tools).toHaveLength(44);
   });
 
   it('should contain all expected tool names', () => {
@@ -91,7 +96,7 @@ describe('MCP Tool Manifest', () => {
       expect(tool.parameters).toBeDefined();
       expect(tool.parameters.type).toBe('object');
       expect(tool.handler).toBeDefined();
-      expect(['client-method', 'custom']).toContain(tool.handler.type);
+      expect(tool.handler.type).toBe('custom');
     }
   });
 
@@ -100,19 +105,6 @@ describe('MCP Tool Manifest', () => {
       // Should not throw when converting to Zod
       const schema = jsonSchemaToInputSchema(tool.parameters as JsonSchema);
       expect(typeof schema).toBe('object');
-    }
-  });
-
-  it('all client-method tools should map to existing UserApiClient methods', () => {
-    // Create a client instance to check method existence
-    const client = Object.getOwnPropertyNames(UserApiClient.prototype);
-    for (const tool of manifest.tools) {
-      if (tool.handler.type === 'client-method') {
-        expect(
-          client,
-          `Tool "${tool.name}" references clientMethod "${tool.handler.clientMethod}" which does not exist on UserApiClient`,
-        ).toContain(tool.handler.clientMethod);
-      }
     }
   });
 
@@ -126,6 +118,14 @@ describe('MCP Tool Manifest', () => {
           `Tool "${tool.name}" references customHandler "${handlerName ?? ''}" which is not implemented`,
         ).toHaveProperty(handlerName ?? '');
       }
+    }
+  });
+
+  it('typed output schemas reference existing custom tools', () => {
+    for (const toolName of Object.keys(TYPED_OUTPUT_SCHEMAS)) {
+      const tool = manifest.tools.find((candidate) => candidate.name === toolName);
+      expect(tool, `Typed output schema references missing tool "${toolName}"`).toBeDefined();
+      expect(tool?.handler.type).toBe('custom');
     }
   });
 
@@ -163,7 +163,7 @@ describe('MCP Tool Manifest', () => {
     }
   });
 
-  it('buildUserServer should register all 43 tools without error', () => {
+  it('buildUserServer should register all 44 tools without error', () => {
     // buildUserServer iterates the manifest and registers tools.
     // If any handler is missing, it throws.
     const server = buildUserServer();
