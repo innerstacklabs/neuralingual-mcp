@@ -179,7 +179,7 @@ export function buildRenderInputFromSetFile(
 ): RenderConfigInput {
   const exactDurationSeconds = resolveExactDurationSeconds(parsed, fallback);
   const input: RenderConfigInput = {
-    voiceId: parsed.voice ?? fallback?.voiceId ?? '',
+    voiceId: parsed.voice ?? fallback?.voiceId ?? null,
     sessionContext: (parsed.renderContext ?? parsed.intentContext ?? fallback?.sessionContext ?? 'general') as SessionContext,
     durationMinutes: parsed.duration ?? Math.max(1, Math.round((exactDurationSeconds ?? 10 * 60) / 60)),
   };

@@ -7,9 +7,23 @@
  *   - `setExport` handler — default (no framework) and withFramework:true
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { CUSTOM_HANDLERS } from './user-mcp.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { buildUserServer, CUSTOM_HANDLERS, withTypedClient, TYPED_OUTPUT_SCHEMAS } from './user-mcp.js';
 import { UserApiClient } from './user-client.js';
 import { NO_FRAMEWORK_MESSAGE } from './framework-render.js';
+import { McpError } from './mcp-error.js';
+import * as mcpToolResult from './mcp-tool-result.js';
+import {
+  nlCoachViewResultSchema,
+  nlCoachesResultSchema,
+  nlPlaylistDeleteResultSchema,
+  nlRenderStartResultSchema,
+  nlRenderStatusResultSchema,
+  nlShareResultSchema,
+  nlUnshareResultSchema,
+} from './mcp-tool-result.js';
 
 const INTENT_ID = 'intent-abc-123';
 
@@ -1469,3 +1483,634 @@ describe('create handler — affirmations[] (#40, absorbed into nl_playlist_crea
   });
 });
 
+describe('typed MCP handlers (#510)', () => {
+  describe.each([
+    ['nl_render_start', 'renderStart'],
+    ['nl_rerender', 'rerender'],
+  ] as const)('%s', (_toolName, handlerName) => {
+    it('returns its typed success branch', async () => {
+      vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+        getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+        startRender: vi.fn().mockResolvedValue({ jobId: 'job-1', status: 'queued' }),
+      } as unknown as UserApiClient);
+
+      const handler = CUSTOM_HANDLERS[handlerName];
+      if (!handler) throw new Error(`${handlerName} handler missing`);
+      const result = await handler({ id: INTENT_ID });
+
+      expect(result.structuredContent?.['kind']).toBe('ok');
+      expect(result.structuredContent?.['jobId']).toBe('job-1');
+      expect(() => nlRenderStartResultSchema.parse(result.structuredContent)).not.toThrow();
+    });
+
+    it('returns its typed client error branch', async () => {
+      vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+        getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+        startRender: vi.fn().mockRejectedValue(
+          new McpError({
+            code: 'conflict',
+            message: 'Render already active',
+            status: 409,
+            retryable: false,
+          }),
+        ),
+      } as unknown as UserApiClient);
+
+      const handler = CUSTOM_HANDLERS[handlerName];
+      if (!handler) throw new Error(`${handlerName} handler missing`);
+      const result = await handler({ id: INTENT_ID });
+
+      expect(result.structuredContent?.['kind']).toBe('error');
+      expect(result.structuredContent?.['status']).toBe(409);
+      expect(() => nlRenderStartResultSchema.parse(result.structuredContent)).not.toThrow();
+    });
+
+    it('returns invalid_response for a malformed API success response', async () => {
+      vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+        getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+        startRender: vi.fn().mockResolvedValue({ jobId: 'job-1' }),
+      } as unknown as UserApiClient);
+
+      const handler = CUSTOM_HANDLERS[handlerName];
+      if (!handler) throw new Error(`${handlerName} handler missing`);
+      const result = await handler({ id: INTENT_ID });
+
+      expect(result.structuredContent?.['kind']).toBe('error');
+      expect(result.structuredContent?.['code']).toBe('invalid_response');
+      expect(() => nlRenderStartResultSchema.parse(result.structuredContent)).not.toThrow();
+    });
+  });
+
+  it('nl_share returns its typed success branch', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      shareIntent: vi.fn().mockResolvedValue({
+        shareToken: 'share-token',
+        shareUrl: 'https://example.com/share/share-token',
+      }),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['share'];
+    if (!handler) throw new Error('share handler missing');
+    const result = await handler({ id: INTENT_ID });
+
+    expect(result.structuredContent?.['kind']).toBe('ok');
+    expect(result.structuredContent?.['shareToken']).toBe('share-token');
+    expect(() => nlShareResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_share returns its typed client error branch', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      shareIntent: vi.fn().mockRejectedValue(
+        new McpError({
+          code: 'server_error',
+          message: 'Share service failed',
+          status: 500,
+          retryable: true,
+        }),
+      ),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['share'];
+    if (!handler) throw new Error('share handler missing');
+    const result = await handler({ id: INTENT_ID });
+
+    expect(result.structuredContent?.['kind']).toBe('error');
+    expect(result.structuredContent?.['status']).toBe(500);
+    expect(() => nlShareResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_share returns invalid_response for a malformed API success response', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      shareIntent: vi.fn().mockResolvedValue({ shareToken: 'share-token' }),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['share'];
+    if (!handler) throw new Error('share handler missing');
+    const result = await handler({ id: INTENT_ID });
+
+    expect(result.structuredContent?.['kind']).toBe('error');
+    expect(result.structuredContent?.['code']).toBe('invalid_response');
+    expect(() => nlShareResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_playlist_delete returns its typed success branch with the resolved ID', async () => {
+    const deleteIntent = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      deleteIntent,
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['playlistDelete'];
+    if (!handler) throw new Error('playlistDelete handler missing');
+    const result = await handler({ id: 'intent-abc' });
+
+    expect(deleteIntent).toHaveBeenCalledWith(INTENT_ID);
+    expect(result.structuredContent?.['kind']).toBe('ok');
+    expect(result.content[0]?.text).toBe(`Deleted playlist ${INTENT_ID}.`);
+    expect(() => nlPlaylistDeleteResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_playlist_delete returns its typed error branch', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      deleteIntent: vi.fn().mockRejectedValue(
+        new McpError({
+          code: 'http_404',
+          message: 'Playlist not found',
+          status: 404,
+          retryable: false,
+        }),
+      ),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['playlistDelete'];
+    if (!handler) throw new Error('playlistDelete handler missing');
+    const result = await handler({ id: INTENT_ID });
+
+    expect(result.structuredContent?.['kind']).toBe('error');
+    expect(result.structuredContent?.['status']).toBe(404);
+    expect(() => nlPlaylistDeleteResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_coach_view returns typed coach data with the last-used marker', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getCoaches: vi.fn().mockResolvedValue({
+        coaches: [
+          { key: 'cole', name: 'Cole' },
+          { key: 'nia', name: 'Nia' },
+        ],
+      }),
+      getMe: vi.fn().mockResolvedValue({ user: { lastCoachKey: 'nia' } }),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['coachView'];
+    if (!handler) throw new Error('coachView handler missing');
+    const result = await handler({ key: 'nia' });
+
+    expect(result.structuredContent).toMatchObject({
+      kind: 'ok',
+      key: 'nia',
+      name: 'Nia',
+      isLastUsed: true,
+    });
+    expect(() => nlCoachViewResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_coach_view returns feature_gated for a structured 404', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getCoaches: vi.fn().mockRejectedValue(
+        new McpError({
+          code: 'http_404',
+          message: 'Not found',
+          status: 404,
+          retryable: false,
+        }),
+      ),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['coachView'];
+    if (!handler) throw new Error('coachView handler missing');
+    const result = await handler({ key: 'cole' });
+
+    expect(result.structuredContent?.['kind']).toBe('feature_gated');
+    expect(() => nlCoachViewResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_coach_view returns not_found with the valid coach keys', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getCoaches: vi.fn().mockResolvedValue({
+        coaches: [
+          { key: 'cole', name: 'Cole' },
+          { key: 'nia', name: 'Nia' },
+        ],
+      }),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['coachView'];
+    if (!handler) throw new Error('coachView handler missing');
+    const result = await handler({ key: 'unknown' });
+
+    expect(result.structuredContent?.['kind']).toBe('not_found');
+    expect(result.structuredContent?.['validKeys']).toEqual(['cole', 'nia']);
+    expect(() => nlCoachViewResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_coach_view returns a typed validation error when key is missing', async () => {
+    const handler = CUSTOM_HANDLERS['coachView'];
+    if (!handler) throw new Error('coachView handler missing');
+    const result = await handler({});
+
+    expect(result.structuredContent?.['kind']).toBe('error');
+    expect(result.structuredContent?.['code']).toBe('validation');
+    expect(() => nlCoachViewResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_coaches returns typed coach data with the last-used marker', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getCoaches: vi.fn().mockResolvedValue({
+        coaches: [
+          { key: 'cole', name: 'Cole' },
+          { key: 'nia', name: 'Nia' },
+        ],
+      }),
+      getMe: vi.fn().mockResolvedValue({ user: { lastCoachKey: 'nia' } }),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['coaches'];
+    if (!handler) throw new Error('coaches handler missing');
+    const result = await handler({});
+    const structured = result.structuredContent;
+
+    expect(structured?.['kind']).toBe('ok');
+    expect(structured?.['lastCoachKey']).toBe('nia');
+    expect(structured?.['coaches']).toEqual([
+      { key: 'cole', name: 'Cole', isLastUsed: false },
+      { key: 'nia', name: 'Nia', isLastUsed: true },
+    ]);
+    expect(() => nlCoachesResultSchema.parse(structured)).not.toThrow();
+  });
+
+  it('nl_coaches returns feature_gated for a structured 404', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getCoaches: vi.fn().mockRejectedValue(
+        new McpError({
+          code: 'http_404',
+          message: 'Not found',
+          status: 404,
+          retryable: false,
+        }),
+      ),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['coaches'];
+    if (!handler) throw new Error('coaches handler missing');
+    const result = await handler({});
+
+    expect(result.structuredContent?.['kind']).toBe('feature_gated');
+    expect(() => nlCoachesResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_coaches preserves non-404 structured errors', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getCoaches: vi.fn().mockRejectedValue(
+        new McpError({
+          code: 'server_error',
+          message: 'Coach service failed',
+          status: 500,
+          retryable: true,
+        }),
+      ),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['coaches'];
+    if (!handler) throw new Error('coaches handler missing');
+    const result = await handler({});
+
+    expect(result.structuredContent?.['kind']).toBe('error');
+    expect(result.structuredContent?.['status']).toBe(500);
+    expect(() => nlCoachesResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it.each([
+    [
+      'ok',
+      {
+        status: 'processing',
+        progress: 40,
+        outputKey: null,
+        errorMessage: null,
+        jobId: 'j1',
+      },
+      undefined,
+    ],
+    [
+      'no_render_job',
+      { status: 'none', progress: 0, outputKey: null, errorMessage: null },
+      undefined,
+    ],
+    [
+      'unknown_status',
+      { status: 'some_future_status', progress: 0, outputKey: null, errorMessage: null },
+      undefined,
+    ],
+    ['error', { progress: 0 }, 'invalid_response'],
+  ] as const)(
+    'nl_render_status returns the %s branch',
+    async (expectedKind, apiResponse, expectedCode) => {
+      vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+        getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+        getRenderStatus: vi.fn().mockResolvedValue(apiResponse),
+      } as unknown as UserApiClient);
+
+      const handler = CUSTOM_HANDLERS['renderStatus'];
+      if (!handler) throw new Error('renderStatus handler missing');
+      const result = await handler({ id: INTENT_ID });
+
+      expect(result.structuredContent?.['kind']).toBe(expectedKind);
+      if (expectedCode) {
+        expect(result.structuredContent?.['code']).toBe(expectedCode);
+        expect(result.structuredContent?.['kind']).not.toBe('no_render_job');
+      }
+      expect(() => nlRenderStatusResultSchema.parse(result.structuredContent)).not.toThrow();
+    },
+  );
+
+  it('nl_unshare returns its typed error branch', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      unshareIntent: vi.fn().mockRejectedValue(
+        new McpError({
+          code: 'http_404',
+          message: 'HTTP 404: Not found',
+          status: 404,
+          retryable: false,
+        }),
+      ),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['unshare'];
+    if (!handler) throw new Error('unshare handler missing');
+    const result = await handler({ id: INTENT_ID });
+
+    expect(result.structuredContent?.['kind']).toBe('error');
+    expect(() => nlUnshareResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+
+  it('nl_unshare returns its typed success branch', async () => {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      unshareIntent: vi.fn().mockResolvedValue(undefined),
+    } as unknown as UserApiClient);
+
+    const handler = CUSTOM_HANDLERS['unshare'];
+    if (!handler) throw new Error('unshare handler missing');
+    const result = await handler({ id: INTENT_ID });
+
+    expect(result.structuredContent?.['kind']).toBe('ok');
+    expect(() => nlUnshareResultSchema.parse(result.structuredContent)).not.toThrow();
+  });
+});
+
+describe('typed MCP plumbing (#510)', () => {
+  it('registers output schemas only for typed tools', () => {
+    type RegisterTool = (
+      name: string,
+      config: Record<string, unknown>,
+      handler: (params: Record<string, unknown>) => unknown,
+    ) => unknown;
+    const prototype = McpServer.prototype as unknown as { registerTool: RegisterTool };
+    const registerTool = vi.spyOn(prototype, 'registerTool');
+
+    buildUserServer();
+
+    const configFor = (toolName: string): Record<string, unknown> => {
+      const call = registerTool.mock.calls.find(([name]) => name === toolName);
+      if (!call) throw new Error(`${toolName} was not registered`);
+      return call[1];
+    };
+    expect(configFor('nl_coaches')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_coach_view')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_render_start')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_render_status')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_rerender')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_share')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_unshare')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_playlist_delete')['outputSchema']).toBeTruthy();
+    expect(configFor('nl_playlist_list')).not.toHaveProperty('outputSchema');
+  });
+
+  it('every typed tool survives the real SDK registration + call path (nl#518 round 2)', async () => {
+    // Round 1 (nl#518) found that a bare discriminated-union outputSchema made
+    // `@modelcontextprotocol/sdk` 1.29.0 silently drop `outputSchema` from `tools/list` and
+    // fail its OWN output validation on every successful call — `toMcpOutputSchema()` fixed
+    // that by widening the schema. The plumbing test above only checks that `outputSchema` is
+    // truthy in the `registerTool()` config; it passed while that bug was live AND while a
+    // follow-up regression (a merged schema too narrow for `nl_coach_view`'s catchall fields)
+    // was live, because neither ever exercises the SDK's own registration/call path. This test
+    // does, over a real `InMemoryTransport`, so a schema the SDK actually rejects fails here
+    // instead of only in production.
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getCoaches: vi.fn().mockResolvedValue({
+        coaches: [{ key: 'nia', name: 'Nia', extraCoachField: 'shows the catchall is honored' }],
+      }),
+      getMe: vi.fn().mockResolvedValue({ user: { lastCoachKey: 'nia' } }),
+    } as unknown as UserApiClient);
+
+    const server = buildUserServer();
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    try {
+      const { tools } = await client.listTools();
+      for (const toolName of Object.keys(TYPED_OUTPUT_SCHEMAS)) {
+        const tool = tools.find((t) => t.name === toolName);
+        expect(tool, `${toolName} missing from tools/list`).toBeTruthy();
+        expect(tool?.outputSchema, `${toolName} advertised no outputSchema`).toBeTruthy();
+      }
+
+      const coachView = await client.callTool({ name: 'nl_coach_view', arguments: { key: 'nia' } });
+      expect(coachView.isError).toBeFalsy();
+      expect(coachView.structuredContent).toMatchObject({ kind: 'ok', key: 'nia', name: 'Nia' });
+      // Pin that the catchall actually keeps an unknown field, not just that the call succeeds
+      // (round 3 nit).
+      expect(coachView.structuredContent).toHaveProperty('extraCoachField');
+
+      const coaches = await client.callTool({ name: 'nl_coaches', arguments: {} });
+      expect(coaches.isError).toBeFalsy();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('routes withClient errors through toMcpToolError', async () => {
+    const thrown = new Error('original message');
+    const sentinel = {
+      kind: 'error' as const,
+      code: 'x',
+      message: 'SENTINEL:42',
+      status: null,
+      retryable: false,
+    };
+    const converter = vi.spyOn(mcpToolResult, 'toMcpToolError').mockReturnValue(sentinel);
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      getLibrary: vi.fn().mockResolvedValue(buildLibraryStub()),
+      getIntent: vi.fn().mockRejectedValue(thrown),
+    } as unknown as UserApiClient);
+
+    const guide = CUSTOM_HANDLERS['guide'];
+    if (!guide) throw new Error('guide handler missing');
+    const result = await guide({ id: INTENT_ID });
+
+    expect(converter).toHaveBeenCalledWith(thrown);
+    expect(result.content[0]?.text).toBe('SENTINEL:42');
+  });
+
+  it('withTypedClient returns the full converted error unchanged', async () => {
+    const thrown = new Error('original message');
+    const sentinel = {
+      kind: 'error' as const,
+      code: 'x',
+      message: 'SENTINEL:42',
+      status: null,
+      retryable: false,
+    };
+    vi.spyOn(mcpToolResult, 'toMcpToolError').mockReturnValue(sentinel);
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({} as UserApiClient);
+
+    const result = await withTypedClient(async () => {
+      throw thrown;
+    });
+
+    expect(result).toBe(sentinel);
+  });
+});
+
+// ── nl_setting_preference_save (nl#233) ───────────────────────────────
+
+describe('settingPreferenceSave handler (nl#233)', () => {
+  const SAVED = {
+    setting: 'durationMinutes',
+    value: null,
+    scope: { kind: 'context', sessionContext: 'sleep' },
+    evidence: { revision: 1, selectionMethod: 'explicit', chosenAt: '2026-10-28T00:00:00.000Z' },
+  };
+
+  function installSaveMock(save: ReturnType<typeof vi.fn>) {
+    vi.spyOn(UserApiClient, 'fromAuth').mockReturnValue({
+      saveSettingPreference: save,
+    } as unknown as UserApiClient);
+  }
+
+  async function call(params: Record<string, unknown>) {
+    const handler = CUSTOM_HANDLERS['settingPreferenceSave'];
+    if (!handler) throw new Error('settingPreferenceSave handler missing');
+    return handler(params);
+  }
+
+  it('saves Full Set: a null durationMinutes goes to the client as null, not as unset', async () => {
+    const save = vi.fn().mockResolvedValue(SAVED);
+    installSaveMock(save);
+
+    const result = await call({ context: 'sleep', setting: 'durationMinutes', value: null });
+
+    expect(result.isError).toBeUndefined();
+    expect(save).toHaveBeenCalledWith('sleep', 'durationMinutes', null);
+    expect(JSON.parse(result.content[0]?.text ?? '{}')).toMatchObject({
+      setting: 'durationMinutes',
+      value: null,
+      evidence: { selectionMethod: 'explicit' },
+    });
+  });
+
+  it('saves a numeric value', async () => {
+    const save = vi.fn().mockResolvedValue({ ...SAVED, setting: 'paceWpm', value: 120 });
+    installSaveMock(save);
+
+    const result = await call({ context: 'sleep', setting: 'paceWpm', value: 120 });
+
+    expect(result.isError).toBeUndefined();
+    expect(save).toHaveBeenCalledWith('sleep', 'paceWpm', 120);
+  });
+
+  it.each(['voice', 'backgroundKey', 'backgroundVolume', 'playbackMode', 'binauralPreset', 'subliminalEnabled'])(
+    'refuses %s, which the route has not crossed over, without calling the API',
+    async (setting) => {
+      const save = vi.fn();
+      installSaveMock(save);
+
+      const result = await call({ context: 'sleep', setting, value: null });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain('setting must be one of');
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not turn an omitted value into a Full Set save', async () => {
+    const save = vi.fn();
+    installSaveMock(save);
+
+    const result = await call({ context: 'sleep', setting: 'durationMinutes' });
+
+    expect(result.isError).toBe(true);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an API refusal as a tool error', async () => {
+    installSaveMock(vi.fn().mockRejectedValue(new Error('HTTP 400: value out of range')));
+
+    const result = await call({ context: 'sleep', setting: 'paceWpm', value: 9000 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('HTTP 400');
+  });
+
+  it('the client sends PUT /setting-preferences with a context scope and an explicit null', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(SAVED), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = new UserApiClient('http://api.test', 'dev', 't', 'r');
+      await client.saveSettingPreference('sleep', 'durationMinutes', null);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://api.test/setting-preferences');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual({
+      setting: 'durationMinutes',
+      value: null,
+      scope: { kind: 'context', sessionContext: 'sleep' },
+    });
+  });
+
+  it('is registered with a schema that rejects a non-crossed setting and cannot reach global scope', async () => {
+    const save = vi.fn().mockResolvedValue(SAVED);
+    installSaveMock(save);
+
+    const server = buildUserServer();
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    try {
+      const ok = await client.callTool({
+        name: 'nl_setting_preference_save',
+        arguments: { context: 'sleep', setting: 'durationMinutes', value: null },
+      });
+      expect(ok.isError).toBeFalsy();
+      expect(save).toHaveBeenCalledTimes(1);
+
+      const withScope = await client.callTool({
+        name: 'nl_setting_preference_save',
+        arguments: { context: 'sleep', setting: 'durationMinutes', value: null, scope: { kind: 'global' } },
+      });
+      const wrongSetting = await client.callTool({
+        name: 'nl_setting_preference_save',
+        arguments: { context: 'sleep', setting: 'backgroundKey', value: null },
+      });
+      const noValue = await client.callTool({
+        name: 'nl_setting_preference_save',
+        arguments: { context: 'sleep', setting: 'durationMinutes' },
+      });
+      // An extra `scope` argument is dropped by the SDK's schema, and the client method has
+      // no scope parameter: the request stays context-scoped whatever the caller sends.
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(save).toHaveBeenLastCalledWith('sleep', 'durationMinutes', null);
+      expect(withScope.isError).toBeFalsy();
+      expect(wrongSetting.isError).toBe(true);
+      expect(noValue.isError).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});

@@ -214,7 +214,8 @@ export interface ListIntentsQuery {
 }
 
 export interface RenderConfigInput {
-  voiceId: string;
+  /** `null` asks the server to resolve the voice cascade (nl#433). */
+  voiceId: string | null;
   sessionContext: SessionContext;
   durationMinutes: number;
   durationSeconds?: number | undefined;
